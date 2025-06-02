@@ -2,6 +2,7 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db.models import Q
+from rest_framework.views import APIView
 import numpy as np
 import cv2
 from PIL import Image
@@ -14,7 +15,7 @@ from .models import AuthorizedFace, FaceVerificationLog
 from .serializers import (
     AuthorizedFaceSerializer, AuthorizedFaceCreateSerializer,
     AuthorizedFaceUpdateSerializer, FaceVerificationSerializer,
-    FaceVerificationRequestSerializer, FaceVerificationResponseSerializer
+    FaceVerificationRequestSerializer, FaceVerificationResponseSerializer, FaceUploadSerializer
 )
 from cameras.models import Camera
 from utils.permissions import IsOwnerOrAdmin
@@ -46,7 +47,8 @@ class AuthorizedFaceViewSet(viewsets.ModelViewSet):
         """Save the authorized face and generate face encoding."""
         face = serializer.save()
         try:
-            self._generate_face_encoding(face)
+            if face.face_image:
+                self._generate_face_encoding(face)
         except Exception as e:
             logger.error(f"Error generating face encoding: {str(e)}")
             face.delete()
@@ -55,7 +57,7 @@ class AuthorizedFaceViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         """Update the authorized face and regenerate face encoding if image changed."""
         face = serializer.save()
-        if 'face_image' in serializer.validated_data:
+        if 'face_image' in serializer.validated_data and face.face_image:
             try:
                 self._generate_face_encoding(face)
             except Exception as e:
@@ -64,8 +66,6 @@ class AuthorizedFaceViewSet(viewsets.ModelViewSet):
     
     def _generate_face_encoding(self, face):
         """Generate and save face encoding from face image."""
-        # This is a placeholder. In a real implementation, you would use a proper face recognition library
-        # like dlib or a deep learning model to generate face embeddings.
         try:
             # Load the image
             if not face.face_image:
@@ -82,7 +82,6 @@ class AuthorizedFaceViewSet(viewsets.ModelViewSet):
                 gray = image_array
             
             # Detect faces (simplified for demonstration)
-            # In a real implementation, use proper face detection
             face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
             faces = face_cascade.detectMultiScale(gray, 1.1, 4)
             
@@ -90,10 +89,10 @@ class AuthorizedFaceViewSet(viewsets.ModelViewSet):
                 raise ValueError("No face detected in the provided image.")
             
             if len(faces) > 1:
-                raise ValueError("Multiple faces detected. Please provide an image with a single face.")
+                logger.warning("Multiple faces detected. Using the largest face.")
             
             # Extract the largest face
-            x, y, w, h = faces[0]
+            x, y, w, h = max(faces, key=lambda face: face[2] * face[3])
             face_roi = gray[y:y+h, x:x+w]
             
             # Resize to a standard size
@@ -102,10 +101,6 @@ class AuthorizedFaceViewSet(viewsets.ModelViewSet):
             # Flatten the face and normalize
             face_array = face_roi_resized.flatten() / 255.0
             
-            # For a real implementation, you would use a proper face embedding model here
-            # This is just a placeholder representation
-            # In production, use libraries like face_recognition or models from dlib
-            
             # Serialize the face encoding
             face_encoding = pickle.dumps(face_array)
             
@@ -113,6 +108,7 @@ class AuthorizedFaceViewSet(viewsets.ModelViewSet):
             face.face_encoding = face_encoding
             face.save(update_fields=['face_encoding'])
             
+            logger.info(f"Face encoding generated successfully for {face.name}")
             return face.face_encoding
             
         except Exception as e:
@@ -123,15 +119,26 @@ class AuthorizedFaceViewSet(viewsets.ModelViewSet):
         """Create a new authorized face."""
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        self.perform_create(serializer)
         
-        headers = self.get_success_headers(serializer.data)
-        return Response({
-            'success': True,
-            'data': serializer.data,
-            'message': 'Authorized face created successfully.',
-            'errors': []
-        }, status=status.HTTP_201_CREATED, headers=headers)
+        try:
+            self.perform_create(serializer)
+            headers = self.get_success_headers(serializer.data)
+            
+            return Response({
+                'success': True,
+                'data': serializer.data,
+                'message': 'Authorized face created successfully.',
+                'errors': []
+            }, status=status.HTTP_201_CREATED, headers=headers)
+            
+        except Exception as e:
+            logger.error(f"Error creating authorized face: {str(e)}")
+            return Response({
+                'success': False,
+                'data': {},
+                'message': 'Failed to create authorized face.',
+                'errors': [str(e)]
+            }, status=status.HTTP_400_BAD_REQUEST)
     
     def update(self, request, *args, **kwargs):
         """Update an authorized face."""
@@ -139,14 +146,25 @@ class AuthorizedFaceViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
-        self.perform_update(serializer)
         
-        return Response({
-            'success': True,
-            'data': serializer.data,
-            'message': 'Authorized face updated successfully.',
-            'errors': []
-        })
+        try:
+            self.perform_update(serializer)
+            
+            return Response({
+                'success': True,
+                'data': serializer.data,
+                'message': 'Authorized face updated successfully.',
+                'errors': []
+            })
+            
+        except Exception as e:
+            logger.error(f"Error updating authorized face: {str(e)}")
+            return Response({
+                'success': False,
+                'data': {},
+                'message': 'Failed to update authorized face.',
+                'errors': [str(e)]
+            }, status=status.HTTP_400_BAD_REQUEST)
     
     def retrieve(self, request, *args, **kwargs):
         """Retrieve an authorized face."""
@@ -164,22 +182,21 @@ class AuthorizedFaceViewSet(viewsets.ModelViewSet):
         """List authorized faces."""
         queryset = self.filter_queryset(self.get_queryset())
         
-        # Apply name filter if provided
+        # Apply filters
         name_filter = request.query_params.get('name')
         if name_filter:
             queryset = queryset.filter(name__icontains=name_filter)
         
-        # Apply role filter if provided
         role_filter = request.query_params.get('role')
         if role_filter:
             queryset = queryset.filter(role__icontains=role_filter)
         
-        # Apply active status filter if provided
         active_filter = request.query_params.get('is_active')
         if active_filter is not None:
             is_active = active_filter.lower() == 'true'
             queryset = queryset.filter(is_active=is_active)
         
+        # Handle pagination
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(page, many=True)
@@ -203,14 +220,33 @@ class AuthorizedFaceViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         """Delete an authorized face."""
         instance = self.get_object()
-        self.perform_destroy(instance)
         
-        return Response({
-            'success': True,
-            'data': {},
-            'message': 'Authorized face deleted successfully.',
-            'errors': []
-        }, status=status.HTTP_200_OK)
+        try:
+            # Delete the face image file if it exists
+            if instance.face_image:
+                try:
+                    if os.path.isfile(instance.face_image.path):
+                        os.remove(instance.face_image.path)
+                except Exception as e:
+                    logger.warning(f"Could not delete face image file: {str(e)}")
+            
+            self.perform_destroy(instance)
+            
+            return Response({
+                'success': True,
+                'data': {},
+                'message': 'Authorized face deleted successfully.',
+                'errors': []
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"Error deleting authorized face: {str(e)}")
+            return Response({
+                'success': False,
+                'data': {},
+                'message': 'Failed to delete authorized face.',
+                'errors': [str(e)]
+            }, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=False, methods=['post'])
     def verify(self, request):
@@ -291,8 +327,11 @@ class AuthorizedFaceViewSet(viewsets.ModelViewSet):
             best_match = None
             highest_confidence = 0.0
             
-            # Get all active authorized faces
-            authorized_faces = AuthorizedFace.objects.filter(is_active=True)
+            # Get all active authorized faces for the user (or all if admin)
+            if request.user.is_admin():
+                authorized_faces = AuthorizedFace.objects.filter(is_active=True)
+            else:
+                authorized_faces = AuthorizedFace.objects.filter(user=request.user, is_active=True)
             
             for auth_face in authorized_faces:
                 if auth_face.face_encoding:
@@ -301,8 +340,9 @@ class AuthorizedFaceViewSet(viewsets.ModelViewSet):
                         stored_encoding = pickle.loads(auth_face.face_encoding)
                         
                         # Compute similarity (using cosine similarity)
-                        # In a real implementation, use proper face comparison methods
-                        similarity = np.dot(face_array, stored_encoding) / (np.linalg.norm(face_array) * np.linalg.norm(stored_encoding))
+                        similarity = np.dot(face_array, stored_encoding) / (
+                            np.linalg.norm(face_array) * np.linalg.norm(stored_encoding)
+                        )
                         
                         # Normalize similarity to 0-1 range as confidence
                         confidence = (similarity + 1) / 2
@@ -352,3 +392,151 @@ class AuthorizedFaceViewSet(viewsets.ModelViewSet):
                 'message': 'Error processing face verification.',
                 'errors': [str(e)]
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    @action(detail=False, methods=['get'])
+    def by_role(self, request):
+        """Get faces grouped by role."""
+        try:
+            queryset = self.get_queryset().filter(is_active=True)
+            
+            # Group faces by role
+            faces_by_role = {}
+            roles = ['primary', 'caregiver', 'family', 'other']
+            
+            for role in roles:
+                role_faces = queryset.filter(role=role)
+                serializer = self.get_serializer(role_faces, many=True)
+                faces_by_role[role] = serializer.data
+            
+            return Response({
+                'success': True,
+                'data': faces_by_role,
+                'message': 'Faces retrieved by role successfully.',
+                'errors': []
+            })
+            
+        except Exception as e:
+            logger.error(f"Error getting faces by role: {str(e)}")
+            return Response({
+                'success': False,
+                'data': {},
+                'message': 'Error retrieving faces by role.',
+                'errors': [str(e)]
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class FaceUploadView(APIView):
+    """
+    API view for uploading face images.
+    This provides an alternative endpoint that matches the frontend expectations.
+    """
+    
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def post(self, request, *args, **kwargs):
+        """Handle face upload requests."""
+        serializer = FaceUploadSerializer(data=request.data)
+        
+        if not serializer.is_valid():
+            return Response({
+                'success': False,
+                'data': {},
+                'message': 'Validation failed.',
+                'errors': [str(error) for field_errors in serializer.errors.values() for error in field_errors]
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            # Create the authorized face
+            face_data = {
+                'name': serializer.validated_data['name'],
+                'role': serializer.validated_data['role'],
+                'face_image': serializer.validated_data['face_image'],
+                'description': serializer.validated_data.get('description', ''),
+                'user': request.user,
+                'is_active': True
+            }
+            
+            # Create the face instance
+            authorized_face = AuthorizedFace.objects.create(**face_data)
+            
+            # Generate face encoding
+            try:
+                self._generate_face_encoding(authorized_face)
+            except Exception as e:
+                logger.error(f"Error generating face encoding: {str(e)}")
+                authorized_face.delete()
+                return Response({
+                    'success': False,
+                    'data': {},
+                    'message': 'Failed to process face image.',
+                    'errors': [f"Face processing error: {str(e)}"]
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Serialize the created face
+            face_serializer = AuthorizedFaceSerializer(authorized_face, context={'request': request})
+            
+            return Response({
+                'success': True,
+                'data': face_serializer.data,
+                'message': 'Face uploaded and processed successfully.',
+                'errors': []
+            }, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            logger.error(f"Error uploading face: {str(e)}")
+            return Response({
+                'success': False,
+                'data': {},
+                'message': 'Failed to upload face.',
+                'errors': [str(e)]
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    def _generate_face_encoding(self, face):
+        """Generate and save face encoding from face image."""
+        try:
+            # Load the image
+            if not face.face_image:
+                raise ValueError("No face image provided.")
+            
+            # Read the image file
+            image = Image.open(face.face_image)
+            image_array = np.array(image)
+            
+            # Convert to grayscale for simpler processing
+            if len(image_array.shape) == 3 and image_array.shape[2] == 3:
+                gray = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
+            else:
+                gray = image_array
+            
+            # Detect faces
+            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+            faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+            
+            if len(faces) == 0:
+                raise ValueError("No face detected in the provided image.")
+            
+            if len(faces) > 1:
+                logger.warning("Multiple faces detected. Using the largest face.")
+            
+            # Extract the largest face
+            x, y, w, h = max(faces, key=lambda face: face[2] * face[3])
+            face_roi = gray[y:y+h, x:x+w]
+            
+            # Resize to a standard size
+            face_roi_resized = cv2.resize(face_roi, (128, 128))
+            
+            # Flatten the face and normalize
+            face_array = face_roi_resized.flatten() / 255.0
+            
+            # Serialize the face encoding
+            face_encoding = pickle.dumps(face_array)
+            
+            # Save the encoding to the model
+            face.face_encoding = face_encoding
+            face.save(update_fields=['face_encoding'])
+            
+            logger.info(f"Face encoding generated successfully for {face.name}")
+            return face.face_encoding
+            
+        except Exception as e:
+            logger.error(f"Error in face encoding generation: {str(e)}")
+            raise

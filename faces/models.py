@@ -1,21 +1,38 @@
 from django.db import models
 from django.contrib.auth import get_user_model
+from django.urls import reverse
 
 User = get_user_model()
 
 class AuthorizedFace(models.Model):
     """Model for storing authorized faces for facial recognition."""
     
+    ROLE_CHOICES = [
+        ('primary', 'Primary'),
+        ('caregiver', 'Caregiver'),
+        ('family', 'Family'),
+        ('other', 'Other'),
+    ]
+    
     # Basic information
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True, null=True)
     
     # Face image data
-    face_image = models.ImageField(upload_to='faces/images/')
+    face_image = models.ImageField(
+        upload_to='faces/images/',
+        null=True,
+        blank=True,
+        help_text='Upload a clear face image for recognition'
+    )
     face_encoding = models.BinaryField(blank=True, null=True)  # Store face encoding as binary data
     
     # Additional information
-    role = models.CharField(max_length=100, blank=True, null=True)
+    role = models.CharField(
+        max_length=100,
+        choices=ROLE_CHOICES,
+        default='other'
+    )
     access_level = models.CharField(max_length=50, blank=True, null=True)
     
     # Foreign keys
@@ -32,9 +49,26 @@ class AuthorizedFace(models.Model):
         verbose_name = 'Authorized Face'
         verbose_name_plural = 'Authorized Faces'
         ordering = ['name']
+        unique_together = ['user', 'name']  # Ensure unique names per user
     
     def __str__(self):
-        return self.name
+        return f"{self.name} ({self.role})"
+    
+    @property
+    def image_url(self):
+        """Get the full URL for the face image."""
+        if self.face_image:
+            return self.face_image.url
+        return None
+    
+    def delete(self, *args, **kwargs):
+        """Override delete to clean up image files."""
+        if self.face_image:
+            try:
+                self.face_image.delete(save=False)
+            except Exception:
+                pass  # File might not exist
+        super().delete(*args, **kwargs)
 
 class FaceVerificationLog(models.Model):
     """Model for storing face verification logs."""
@@ -67,5 +101,6 @@ class FaceVerificationLog(models.Model):
     
     def __str__(self):
         if self.authorized_face:
-            return f"Verification of {self.authorized_face.name} at {self.verified_at}"
+            status = "✓" if self.is_match else "✗"
+            return f"{status} {self.authorized_face.name} ({self.confidence:.2f}) - {self.verified_at}"
         return f"Unknown face verification at {self.verified_at}"
