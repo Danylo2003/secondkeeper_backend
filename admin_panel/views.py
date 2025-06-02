@@ -1,4 +1,4 @@
-# admin_panel/views.py (Updated UserAdminViewSet section)
+# admin_panel/views.py - Updated with complete role-based access control
 
 from rest_framework import viewsets, generics, status, permissions
 from rest_framework.decorators import action
@@ -21,7 +21,8 @@ from .serializers import (
 )
 from cameras.models import Camera
 from alerts.models import Alert
-from utils.permissions import IsAdminUser
+from utils.permissions import IsAdminUser, IsManagerOrAdmin, CanAddRoles
+from accounts.serializers import UserCreateSerializer
 
 User = get_user_model()
 logger = logging.getLogger('security_ai')
@@ -29,13 +30,22 @@ logger = logging.getLogger('security_ai')
 class UserAdminViewSet(viewsets.ModelViewSet):
     """ViewSet for admin management of users."""
     
-    permission_classes = [permissions.IsAuthenticated, IsAdminUser]
+    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
     serializer_class = UserAdminSerializer
     
     def get_queryset(self):
-        """Get all non-admin users with additional counts."""
-        # Only get users with role='user' (exclude admins and managers)
-        queryset = User.objects.filter(role='user').order_by('-date_joined')
+        """Get users based on current user's role."""
+        user = self.request.user
+        
+        if user.is_admin():
+            # Admins can see all users except other admins
+            queryset = User.objects.exclude(role='admin').order_by('-date_joined')
+        elif user.is_manager():
+            # Managers can only see regular users (clients)
+            queryset = User.objects.filter(role='user').order_by('-date_joined')
+        else:
+            # Reviewers and regular users can't see any users
+            queryset = User.objects.none()
         
         # Annotate with camera and alert counts
         queryset = queryset.annotate(
@@ -66,13 +76,14 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         """Return appropriate serializer class based on the action."""
         if self.action in ['update', 'partial_update']:
             return UserUpdateAdminSerializer
+        elif self.action == 'add_role':
+            return UserCreateSerializer
         return self.serializer_class
     
     def list(self, request, *args, **kwargs):
-        """List all non-admin users."""
+        """List users based on permissions."""
         queryset = self.filter_queryset(self.get_queryset())
         page = self.paginate_queryset(queryset)
-       
         
         if page is not None:
             serializer = self.get_serializer(page, many=True)
@@ -119,6 +130,59 @@ class UserAdminViewSet(viewsets.ModelViewSet):
             'success': True,
             'data': UserAdminSerializer(instance).data,
             'message': 'User updated successfully.',
+            'errors': []
+        })
+    
+    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated, CanAddRoles])
+    def add_role(self, request):
+        """Add a new role (manager, reviewer, etc.) - Admin only"""
+        serializer = UserCreateSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        
+        # Ensure the role is valid and not admin
+        role = request.data.get('role', 'user')
+        if role not in ['manager', 'reviewer', 'user']:
+            return Response({
+                'success': False,
+                'data': {},
+                'message': 'Invalid role specified.',
+                'errors': ['Role must be manager, reviewer, or user.']
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        user = serializer.save()
+        
+        # Re-fetch with annotations for response
+        try:
+            user_with_counts = self.get_queryset().get(pk=user.pk)
+            response_data = UserAdminSerializer(user_with_counts).data
+        except User.DoesNotExist:
+            response_data = UserAdminSerializer(user).data
+        
+        return Response({
+            'success': True,
+            'data': response_data,
+            'message': f'{role.capitalize()} added successfully.',
+            'errors': []
+        }, status=status.HTTP_201_CREATED)
+    
+    @action(detail=False, methods=['get'])
+    def user_permissions(self, request):
+        """Get current user's permissions for UI display"""
+        user = request.user
+        
+        permissions_data = {
+            'can_add_roles': user.can_add_roles(),
+            'can_manage_users': user.can_manage_users(),
+            'role': user.role,
+            'is_admin': user.is_admin(),
+            'is_manager': user.is_manager(),
+            'is_reviewer': user.is_reviewer()
+        }
+        
+        return Response({
+            'success': True,
+            'data': permissions_data,
+            'message': 'User permissions retrieved successfully.',
             'errors': []
         })
     
@@ -217,7 +281,154 @@ class UserAdminViewSet(viewsets.ModelViewSet):
             'message': message,
             'errors': []
         })
+
+class CameraAdminViewSet(viewsets.ModelViewSet):
+    """ViewSet for admin management of cameras."""
+    
+    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    
+    def get_queryset(self):
+        """Get all cameras with user annotations."""
+        queryset = Camera.objects.select_related('user').order_by('-created_at')
         
+        # Apply filters if provided
+        user_filter = self.request.query_params.get('user_id')
+        if user_filter:
+            queryset = queryset.filter(user_id=user_filter)
+        
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        
+        search = self.request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(
+                Q(name__icontains=search) |
+                Q(user__full_name__icontains=search) |
+                Q(user__email__icontains=search) |
+                Q(stream_url__icontains=search)
+            )
+        
+        return queryset
+    
+    def list(self, request, *args, **kwargs):
+        """List all cameras for admin/manager."""
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        
+        if page is not None:
+            cameras_data = []
+            for camera in page:
+                cameras_data.append({
+                    'id': str(camera.id),
+                    'name': camera.name,
+                    'stream_url': camera.stream_url,
+                    'status': camera.status,
+                    'user_id': str(camera.user.id),
+                    'user_name': camera.user.full_name,
+                    'user_email': camera.user.email,
+                    'created_at': camera.created_at,
+                    'updated_at': camera.updated_at,
+                })
+            
+            response = self.get_paginated_response(cameras_data)
+            response.data = {
+                'success': True,
+                'data': response.data,
+                'message': 'Cameras retrieved successfully.',
+                'errors': []
+            }
+            return response
+        
+        cameras_data = []
+        for camera in queryset:
+            cameras_data.append({
+                'id': str(camera.id),
+                'name': camera.name,
+                'stream_url': camera.stream_url,
+                'status': camera.status,
+                'user_id': str(camera.user.id),
+                'user_name': camera.user.full_name,
+                'user_email': camera.user.email,
+                'created_at': camera.created_at,
+                'updated_at': camera.updated_at,
+            })
+        
+        return Response({
+            'success': True,
+            'data': cameras_data,
+            'message': 'Cameras retrieved successfully.',
+            'errors': []
+        })
+    
+    def retrieve(self, request, *args, **kwargs):
+        """Retrieve a specific camera."""
+        instance = self.get_object()
+        
+        camera_data = {
+            'id': str(instance.id),
+            'name': instance.name,
+            'stream_url': instance.stream_url,
+            'status': instance.status,
+            'user_id': str(instance.user.id),
+            'user_name': instance.user.full_name,
+            'user_email': instance.user.email,
+            'created_at': instance.created_at,
+            'updated_at': instance.updated_at,
+        }
+        
+        return Response({
+            'success': True,
+            'data': camera_data,
+            'message': 'Camera retrieved successfully.',
+            'errors': []
+        })
+    
+    def update(self, request, *args, **kwargs):
+        """Update a camera."""
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        
+        # Simple update logic - you can expand this based on your Camera model fields
+        allowed_fields = ['name', 'stream_url', 'status']
+        update_data = {k: v for k, v in request.data.items() if k in allowed_fields}
+        
+        for field, value in update_data.items():
+            setattr(instance, field, value)
+        
+        instance.save()
+        
+        camera_data = {
+            'id': str(instance.id),
+            'name': instance.name,
+            'stream_url': instance.stream_url,
+            'status': instance.status,
+            'user_id': str(instance.user.id),
+            'user_name': instance.user.full_name,
+            'user_email': instance.user.email,
+            'created_at': instance.created_at,
+            'updated_at': instance.updated_at,
+        }
+        
+        return Response({
+            'success': True,
+            'data': camera_data,
+            'message': 'Camera updated successfully.',
+            'errors': []
+        })
+    
+    def destroy(self, request, *args, **kwargs):
+        """Delete a camera."""
+        instance = self.get_object()
+        instance.delete()
+        
+        return Response({
+            'success': True,
+            'data': {},
+            'message': 'Camera deleted successfully.',
+            'errors': []
+        })
+
 class SystemStatusViewSet(viewsets.GenericViewSet):
     """ViewSet for system status and metrics."""
     

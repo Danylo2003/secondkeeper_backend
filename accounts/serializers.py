@@ -19,16 +19,28 @@ class UserCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ('id', 'email', 'password', 'full_name', 
-                  'role', 'username',
-                  'phone_number')
+                  'role', 'username', 'phone_number')
         extra_kwargs = {
             'full_name': {'required': True},
             'email': {'required': True}
         }
+    
+    def validate_role(self, value):
+        """Validate that only admins can create other admin accounts."""
+        if value == 'admin':
+            request = self.context.get('request')
+            if not request or not request.user.is_admin():
+                raise serializers.ValidationError("Only admins can create admin accounts.")
+        return value
+    
     def create(self, validated_data):
         """Create and return a new user."""
         validated_data['is_active'] = True
         validated_data['status'] = 'active'
+        
+        # Set staff status for managers and reviewers
+        if validated_data.get('role') in ['manager', 'reviewer']:
+            validated_data['is_staff'] = True
         
         user = User.objects.create_user(**validated_data)
         return user
@@ -38,7 +50,16 @@ class UserUpdateSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = User
-        fields = ('full_name', 'phone_number', 'profile_picture')
+        fields = ('full_name', 'phone_number', 'profile_picture', 'role')
+    
+    def validate_role(self, value):
+        """Validate role changes."""
+        request = self.context.get('request')
+        if not request or not request.user.is_admin():
+            # Non-admins cannot change roles
+            if self.instance and self.instance.role != value:
+                raise serializers.ValidationError("You don't have permission to change user roles.")
+        return value
 
 class ChangePasswordSerializer(serializers.Serializer):
     """Serializer for password change."""

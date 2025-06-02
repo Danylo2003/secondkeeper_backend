@@ -1,3 +1,5 @@
+# accounts/models.py - Updated User model with better role management
+
 from django.db import models
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.utils.translation import gettext_lazy as _
@@ -41,6 +43,7 @@ class User(AbstractUser):
     ROLE_CHOICES = (
         ('admin', 'Admin'),
         ('manager', 'Manager'),
+        ('reviewer', 'Reviewer'),
         ('user', 'User'),
     )
     STATUS_CHOICES = (
@@ -51,7 +54,6 @@ class User(AbstractUser):
     email = models.EmailField(_('email address'), unique=True)
     username = models.CharField(max_length=150, unique=True, null=True, blank=True)
     full_name = models.CharField(_('full name'), max_length=150)
-    # Remove first_name and last_name fields
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='user')
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     profile_picture = models.ImageField(upload_to='profile_pictures', blank=True, null=True)
@@ -93,6 +95,18 @@ class User(AbstractUser):
     def is_manager(self):
         """Check if the user is a manager."""
         return self.role == 'manager'
+    
+    def is_reviewer(self):
+        """Check if the user is a reviewer."""
+        return self.role == 'reviewer'
+
+    def can_manage_users(self):
+        """Check if user can manage other users."""
+        return self.role in ['admin', 'manager']
+
+    def can_add_roles(self):
+        """Check if user can add new roles (managers, reviewers)."""
+        return self.role == 'admin'
 
     def block_user(self):
         """Block the user account."""

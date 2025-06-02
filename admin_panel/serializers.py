@@ -67,6 +67,42 @@ class UserUpdateAdminSerializer(serializers.ModelSerializer):
             'email', 'full_name', 'role', 
             'phone_number', 'is_active', 'status'
         )
+    
+    def validate_role(self, value):
+        """Validate role changes based on current user's permissions."""
+        request = self.context.get('request')
+        if not request:
+            return value
+            
+        current_user = request.user
+        target_user = self.instance
+        
+        # Only admins can change roles to admin
+        if value == 'admin' and not current_user.is_admin():
+            raise serializers.ValidationError("Only admins can assign admin role.")
+        
+        # Managers cannot change roles of other managers, reviewers, or admins
+        if current_user.is_manager() and not current_user.is_admin():
+            if target_user and target_user.role != 'user':
+                raise serializers.ValidationError("Managers can only manage regular users.")
+            if value != 'user':
+                raise serializers.ValidationError("Managers can only assign user role.")
+        
+        return value
+
+class CameraAdminSerializer(serializers.ModelSerializer):
+    """Serializer for admin camera management."""
+    
+    user_name = serializers.CharField(source='user.full_name', read_only=True)
+    user_email = serializers.CharField(source='user.email', read_only=True)
+    
+    class Meta:
+        model = 'cameras.Camera'
+        fields = (
+            'id', 'name', 'stream_url', 'status', 'user_id', 
+            'user_name', 'user_email', 'created_at', 'updated_at'
+        )
+        read_only_fields = ('id', 'user_name', 'user_email', 'created_at', 'updated_at')
 
 class SystemStatusSerializer(serializers.Serializer):
     """Serializer for system status metrics."""
