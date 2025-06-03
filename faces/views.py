@@ -46,74 +46,10 @@ class AuthorizedFaceViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         """Save the authorized face and generate face encoding."""
         face = serializer.save()
-        try:
-            if face.face_image:
-                self._generate_face_encoding(face)
-        except Exception as e:
-            logger.error(f"Error generating face encoding: {str(e)}")
-            face.delete()
-            raise serializer.ValidationError({"face_image": f"Error processing face image: {str(e)}"})
     
     def perform_update(self, serializer):
         """Update the authorized face and regenerate face encoding if image changed."""
         face = serializer.save()
-        if 'face_image' in serializer.validated_data and face.face_image:
-            try:
-                self._generate_face_encoding(face)
-            except Exception as e:
-                logger.error(f"Error generating face encoding: {str(e)}")
-                raise serializer.ValidationError({"face_image": f"Error processing face image: {str(e)}"})
-    
-    def _generate_face_encoding(self, face):
-        """Generate and save face encoding from face image."""
-        try:
-            # Load the image
-            if not face.face_image:
-                raise ValueError("No face image provided.")
-            
-            # Read the image file
-            image = Image.open(face.face_image)
-            image_array = np.array(image)
-            
-            # Convert to grayscale for simpler processing
-            if len(image_array.shape) == 3 and image_array.shape[2] == 3:
-                gray = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
-            else:
-                gray = image_array
-            
-            # Detect faces (simplified for demonstration)
-            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-            faces = face_cascade.detectMultiScale(gray, 1.1, 4)
-            
-            if len(faces) == 0:
-                raise ValueError("No face detected in the provided image.")
-            
-            if len(faces) > 1:
-                logger.warning("Multiple faces detected. Using the largest face.")
-            
-            # Extract the largest face
-            x, y, w, h = max(faces, key=lambda face: face[2] * face[3])
-            face_roi = gray[y:y+h, x:x+w]
-            
-            # Resize to a standard size
-            face_roi_resized = cv2.resize(face_roi, (128, 128))
-            
-            # Flatten the face and normalize
-            face_array = face_roi_resized.flatten() / 255.0
-            
-            # Serialize the face encoding
-            face_encoding = pickle.dumps(face_array)
-            
-            # Save the encoding to the model
-            face.face_encoding = face_encoding
-            face.save(update_fields=['face_encoding'])
-            
-            logger.info(f"Face encoding generated successfully for {face.name}")
-            return face.face_encoding
-            
-        except Exception as e:
-            logger.error(f"Error in face encoding generation: {str(e)}")
-            raise
     
     def create(self, request, *args, **kwargs):
         """Create a new authorized face."""
@@ -458,19 +394,6 @@ class FaceUploadView(APIView):
             # Create the face instance
             authorized_face = AuthorizedFace.objects.create(**face_data)
             
-            # Generate face encoding
-            try:
-                self._generate_face_encoding(authorized_face)
-            except Exception as e:
-                logger.error(f"Error generating face encoding: {str(e)}")
-                authorized_face.delete()
-                return Response({
-                    'success': False,
-                    'data': {},
-                    'message': 'Failed to process face image.',
-                    'errors': [f"Face processing error: {str(e)}"]
-                }, status=status.HTTP_400_BAD_REQUEST)
-            
             # Serialize the created face
             face_serializer = AuthorizedFaceSerializer(authorized_face, context={'request': request})
             
@@ -489,54 +412,3 @@ class FaceUploadView(APIView):
                 'message': 'Failed to upload face.',
                 'errors': [str(e)]
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
-    def _generate_face_encoding(self, face):
-        """Generate and save face encoding from face image."""
-        try:
-            # Load the image
-            if not face.face_image:
-                raise ValueError("No face image provided.")
-            
-            # Read the image file
-            image = Image.open(face.face_image)
-            image_array = np.array(image)
-            
-            # Convert to grayscale for simpler processing
-            if len(image_array.shape) == 3 and image_array.shape[2] == 3:
-                gray = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
-            else:
-                gray = image_array
-            
-            # Detect faces
-            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-            faces = face_cascade.detectMultiScale(gray, 1.1, 4)
-            
-            if len(faces) == 0:
-                raise ValueError("No face detected in the provided image.")
-            
-            if len(faces) > 1:
-                logger.warning("Multiple faces detected. Using the largest face.")
-            
-            # Extract the largest face
-            x, y, w, h = max(faces, key=lambda face: face[2] * face[3])
-            face_roi = gray[y:y+h, x:x+w]
-            
-            # Resize to a standard size
-            face_roi_resized = cv2.resize(face_roi, (128, 128))
-            
-            # Flatten the face and normalize
-            face_array = face_roi_resized.flatten() / 255.0
-            
-            # Serialize the face encoding
-            face_encoding = pickle.dumps(face_array)
-            
-            # Save the encoding to the model
-            face.face_encoding = face_encoding
-            face.save(update_fields=['face_encoding'])
-            
-            logger.info(f"Face encoding generated successfully for {face.name}")
-            return face.face_encoding
-            
-        except Exception as e:
-            logger.error(f"Error in face encoding generation: {str(e)}")
-            raise
