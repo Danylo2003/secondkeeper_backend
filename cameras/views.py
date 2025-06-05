@@ -11,7 +11,7 @@ from .serializers import (
     CameraStatusSerializer, CameraListSerializer, CameraSettingsSerializer
 )
 from utils.permissions import IsOwnerOrAdmin
-from streaming.stream_manager import stream_manager
+from utils.stream_proxy import start_camera_stream, stop_all_streams
 logger = logging.getLogger('security_ai')
 
 class CameraViewSet(viewsets.ModelViewSet):
@@ -115,7 +115,6 @@ class CameraViewSet(viewsets.ModelViewSet):
         """Delete a camera."""
         instance = self.get_object()
         camera_id = instance.id
-        stream_manager.stop_camera_stream(camera_id)
         self.perform_destroy(instance)
         
         return Response({
@@ -150,36 +149,35 @@ class CameraViewSet(viewsets.ModelViewSet):
         """Get camera livestream URL for HLS streaming."""
         try:
             camera = self.get_object()
-            camera_id = camera.id
-            use_gstreamer = request.query_params.get('gstreamer', 'true').lower() == 'true'
-            # result = stream_manager.start_camera_stream(camera_id, use_gstreamer)
-            print(use_gstreamer)
-            if result['success']:
+            quality = request.query_params.get('quality', 'medium')
+            print(camera.id, camera.name, camera.status)
+            
+            # Create and start stream proxy
+            result = start_camera_stream(camera, target_fps=15)
+            
+            if result['success'] and result['hls_ready']:
                 return Response({
                     'success': True,
                     'data': {
-                        'session_id': result['session_id'],
-                        'group_name': result['group_name'],
-                        'stream_type': result['stream_type'],
-                        'websocket_url': f"/ws/stream/{result['group_name']}/",
+                        'stream_url': result['stream_url'],
+                        'quality': quality,
                         'camera_info': {
                             'id': camera.id,
                             'name': camera.name,
-                            'location': camera.location,
-                            'detection_enabled': camera.detection_enabled
+                            'status': camera.status
                         }
                     },
-                    'message': 'Stream started successfully.',
+                    'message': result['message'],
                     'errors': []
                 })
             else:
                 return Response({
                     'success': False,
                     'data': {},
-                    'message': 'Failed to start stream.',
-                    'errors': [result.get('error', 'Unknown error')]
+                    'message': result['message'],
+                    'errors': [result['message']]
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
+            
         except Camera.DoesNotExist:
             return Response({
                 'success': False,
@@ -208,6 +206,13 @@ class CameraViewSet(viewsets.ModelViewSet):
             'data': serializer.data,
             'message': 'Camera statuses retrieved successfully.',
             'errors': []
+        })
+    
+    def stop_all_streams_view(request):
+        stop_all_streams()
+        return JsonResponse({
+            'success': True,
+            'message': 'All streams stopped'
         })
     
     # @action(detail=True, methods=['get', 'put', 'patch'])
