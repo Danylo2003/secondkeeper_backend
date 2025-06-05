@@ -214,28 +214,3 @@ class CameraViewSet(viewsets.ModelViewSet):
             'success': True,
             'message': 'All streams stopped'
         })
-    
-    # @action(detail=True, methods=['get', 'put', 'patch'])
-    # def settings(self, request, pk=None):
-    #     """Get or update camera detection settings."""
-    #     camera = self.get_object()
-        
-    #     if request.method == 'GET':
-    #         serializer = CameraSettingsSerializer(camera)
-    #         return Response({
-    #             'success': True,
-    #             'data': serializer.data,
-    #             'message': 'Camera settings retrieved successfully.',
-    #             'errors': []
-    #         })
-        
-    #     serializer = CameraSettingsSerializer(camera, data=request.data, partial=True)
-    #     serializer.is_valid(raise_exception=True)
-    #     camera = serializer.save()
-        
-    #     return Response({
-    #         'success': True,
-    #         'data': serializer.data,
-    #         'message': 'Camera settings updated successfully.',
-    #         'errors': []
-    #     })
