@@ -423,6 +423,7 @@ class VideoFileProcessor:
                     conf_threshold = config['conf_threshold']
                     iou_threshold = config['iou_threshold']
                     image_size = config['image_size']
+                    print("detector_type:", detector_type, " conf_threshold: ", conf_threshold, " iou_threshold: ", iou_threshold)
                     
                     # Run detection
                     annotated_frame, results = detector.predict_video_frame(
