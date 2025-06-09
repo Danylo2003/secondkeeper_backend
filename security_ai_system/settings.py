@@ -162,9 +162,6 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# CORS settings
-# CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000,http://127.0.0.1:8080,http://localhost:8080,https://secondkeeper.cc').split(',')
-
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_METHODS = [
@@ -238,6 +235,7 @@ MODEL_PATHS = {
     'fall': os.path.join(BASE_DIR, 'models', 'fall.pt'),
     'violence': os.path.join(BASE_DIR, 'models', 'violence.pt'),
     'choking': os.path.join(BASE_DIR, 'models', 'choking.pt'),
+    'person': os.path.join(BASE_DIR, 'models', 'yolov8m.pt'),
 }
 
 # Video and image storage settings

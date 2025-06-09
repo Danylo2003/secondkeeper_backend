@@ -329,23 +329,51 @@ class CameraProcessor:
         finally:
             if self.cap:
                 self.cap.release()
-                
+
     def _process_frame(self, frame):
-        """Process a single frame with all detectors using specific thresholds"""
+        """Process a single frame with conditional detection logic"""
         try:
-            # Check each detector if enabled for this camera
+            # First, check for people using person detector
+            person_detector = self.detectors.get('person')
+            if person_detector is None:
+                # Add person detector if not available
+                from detectors import PersonDetector
+                person_detector = PersonDetector()
+                self.detectors['person'] = person_detector
+            
+            # Get person detection configuration
+            person_config = self.manager.model_manager.get_detector_config('person')
+            person_conf_threshold = person_config['conf_threshold']
+            person_iou_threshold = person_config['iou_threshold']
+            person_image_size = person_config['image_size']
+            
+            # Run person detection
+            person_annotated_frame, person_results = person_detector.predict_video_frame(
+                frame, 
+                person_conf_threshold,
+                person_iou_threshold,
+                person_image_size
+            )
+            
+            # Check if person is detected
+            has_person, person_confidence = self._check_detection_results(person_results, person_conf_threshold)
+            
             detectors_to_run = []
             
-            if self.camera.fire_smoke_detection:
-                detectors_to_run.append('fire_smoke')
-            if self.camera.fall_detection:
-                detectors_to_run.append('fall')
-            if self.camera.violence_detection:
-                detectors_to_run.append('violence')
-            if self.camera.choking_detection:
-                detectors_to_run.append('choking')
-                
-            # Run object detection models with specific thresholds
+            if has_person:
+                # Person detected - check for fall, choking, violence
+                if self.camera.fall_detection:
+                    detectors_to_run.append('fall')
+                if self.camera.violence_detection:
+                    detectors_to_run.append('violence')
+                if self.camera.choking_detection:
+                    detectors_to_run.append('choking')
+            else:
+                # No person detected - check for fire/smoke
+                if self.camera.fire_smoke_detection:
+                    detectors_to_run.append('fire_smoke')
+            
+            # Run appropriate detectors based on person detection
             for detector_type in detectors_to_run:
                 try:
                     detector = self.detectors[detector_type]
@@ -356,7 +384,7 @@ class CameraProcessor:
                     iou_threshold = config['iou_threshold']
                     image_size = config['image_size']
                     
-                    # Run detection with specific thresholds
+                    # Run detection
                     annotated_frame, results = detector.predict_video_frame(
                         frame, 
                         conf_threshold,
@@ -370,9 +398,8 @@ class CameraProcessor:
                     if has_detection and max_confidence >= conf_threshold:
                         # Check if we should create an alert
                         if self.manager.should_create_alert(str(self.camera.id), detector_type):
-                            # Create pending alert for reviewer confirmation
-                            self.manager.create_pending_alert(
-                                self.camera,
+                            # Create pending alert with bounding box video
+                            self._create_detection_alert_with_bbox(
                                 detector_type,
                                 max_confidence,
                                 frame,
@@ -384,7 +411,30 @@ class CameraProcessor:
                     
         except Exception as e:
             logger.error(f"Error processing frame for camera {self.camera.id}: {str(e)}")
+
+    def _create_detection_alert_with_bbox(self, detector_type, confidence, frame, detection_results):
+        """Create detection alert with bounding box video"""
+        try:
+            # Use the enhanced video processor to create alert with bounding box video
+            alert = self.video_processor.process_detection_with_video_and_bbox(
+                self.camera,
+                detector_type,
+                confidence,
+                detection_results,
+                frame
+            )
             
+            if alert:
+                logger.info(f"Created detection alert {alert.id} with bounding box video for {detector_type} on camera {self.camera.id}")
+                return alert
+            else:
+                logger.error(f"Failed to create detection alert with bounding box video for {detector_type}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error creating detection alert with bounding box video: {str(e)}")
+            return None
+
     def _check_detection_results(self, results, conf_threshold):
         """Check detection results for valid detections"""
         has_detection = False

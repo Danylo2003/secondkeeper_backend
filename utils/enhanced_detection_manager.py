@@ -557,23 +557,45 @@ class EnhancedCameraProcessor:
         finally:
             if self.cap:
                 self.cap.release()
-                
+
     def _process_frame(self, frame):
-        """Process a single frame with all detectors"""
+        """Process a single frame with conditional detection logic for video files"""
         try:
-            # Check each detector if enabled for this camera
+            # First, check for people using person detector
+            person_detector = self.detectors.get('person')
+            if person_detector is None:
+                # Add person detector if not available
+                from detectors import PersonDetector
+                person_detector = PersonDetector()
+                self.detectors['person'] = person_detector
+            
+            # Get person detection configuration
+            person_config = self.manager.model_manager.get_detector_config('person')
+            person_conf_threshold = person_config['conf_threshold']
+            person_iou_threshold = person_config['iou_threshold']
+            person_image_size = person_config['image_size']
+            
+            # Run person detection
+            person_annotated_frame, person_results = person_detector.predict_video_frame(
+                frame, 
+                person_conf_threshold,
+                person_iou_threshold,
+                person_image_size
+            )
+            
+            # Check if person is detected
+            has_person, person_confidence = self._check_detection_results(person_results, person_conf_threshold)
+            
             detectors_to_run = []
             
-            if self.camera.fire_smoke_detection:
+            if has_person:
+                # Person detected - check for fall, choking, violence
+                detectors_to_run.extend(['fall', 'violence', 'choking'])
+            else:
+                # No person detected - check for fire/smoke
                 detectors_to_run.append('fire_smoke')
-            if self.camera.fall_detection:
-                detectors_to_run.append('fall')
-            if self.camera.violence_detection:
-                detectors_to_run.append('violence')
-            if self.camera.choking_detection:
-                detectors_to_run.append('choking')
-                
-            # Run object detection models
+            
+            # Run appropriate detectors based on person detection
             for detector_type in detectors_to_run:
                 try:
                     detector = self.detectors[detector_type]
@@ -597,20 +619,81 @@ class EnhancedCameraProcessor:
                     
                     if has_detection and max_confidence >= conf_threshold:
                         # Check if we should create an alert
-                        if self.manager.should_create_alert(str(self.camera.id), detector_type):
-                            # Create pending alert for reviewer confirmation
-                            self.video_processor.process_detection_with_video(
-                                self.camera,
+                        source_id = f"video_{self.video_name}"
+                        if self.manager.should_create_alert(source_id, detector_type):
+                            # Create test alert with bounding box
+                            self._create_test_alert_with_bbox(
                                 detector_type,
                                 max_confidence,
+                                frame,
                                 results
                             )
                             
                 except Exception as e:
-                    logger.error(f"Error running {detector_type} detector on camera {self.camera.id}: {str(e)}")
+                    logger.error(f"Error running {detector_type} detector on video {self.video_name}: {str(e)}")
+                    
         except Exception as e:
-            logger.error(f"Error processing frame for camera {self.camera.id}: {str(e)}")
+            logger.error(f"Error processing frame for video {self.video_name}: {str(e)}")
+    
+    def create_test_alert_with_bbox(self, source_name, alert_type, confidence, frame, detection_results):
+        """Create alert for test video detection with bounding box"""
+        try:
+            # Create a mock camera for test videos
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
             
+            # Get or create admin user for test videos
+            admin_user = User.objects.filter(role='admin', is_active=True).first()
+            if not admin_user:
+                logger.warning("No admin user found for test video alerts")
+                return None
+            
+            # Create or get test camera
+            test_camera, created = Camera.objects.get_or_create(
+                name=f"Test Video Camera - {source_name}",
+                user=admin_user,
+                defaults={
+                    'stream_url': f"file://{source_name}",
+                    'status': 'online',
+                    'detection_enabled': True,
+                    'fire_smoke_detection': True,
+                    'fall_detection': True,
+                    'violence_detection': True,
+                    'choking_detection': True
+                }
+            )
+            
+            # Create pending alert with bounding box video
+            alert = self.video_processor.create_test_detection_alert_with_bbox(
+                test_camera, alert_type, confidence, detection_results, source_name, frame
+            )
+            
+            if alert:
+                logger.info(f"Created test alert {alert.id} with bounding box for {alert_type} detection in {source_name}")
+                return alert
+            else:
+                logger.error(f"Failed to create test alert with bounding box for {alert_type} detection")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error creating test alert with bounding box: {str(e)}")
+            return None
+
+    def _create_test_alert_with_bbox(self, detector_type, confidence, frame, detection_results):
+        """Create test alert with bounding box highlighting"""
+        try:
+            # Create test alert with bounding box video
+            self.manager.create_test_alert_with_bbox(
+                self.video_name,
+                detector_type,
+                confidence,
+                frame,
+                detection_results
+            )
+            
+        except Exception as e:
+            logger.error(f"Error creating test alert with bounding box: {str(e)}")
+
     def _check_detection_results(self, results, conf_threshold):
         """Check detection results for valid detections"""
         has_detection = False

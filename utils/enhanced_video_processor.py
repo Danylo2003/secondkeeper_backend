@@ -268,7 +268,349 @@ class EnhancedVideoProcessor:
             
         except Exception as e:
             logger.error(f"Error getting test detection statistics: {str(e)}")
-            return stats
+            return 
+            
+    def create_test_detection_alert_with_bbox(self, camera, alert_type, confidence, detection_results, source_video_name, frame=None):
+        """
+        Create alert for test video detection with bounding box
+        
+        Args:
+            camera: Camera model instance (test camera)
+            alert_type: Type of detection
+            confidence: Detection confidence
+            detection_results: Detection results from model
+            source_video_name: Name of the source video file
+            frame: Current frame for thumbnail
+            
+        Returns:
+            Alert: Created alert instance or None if failed
+        """
+        try:
+            with transaction.atomic():
+                # Create output directory for test detections
+                test_output_dir = os.path.join(settings.MEDIA_ROOT, 'test_detections')
+                test_dir = os.path.join(test_output_dir, alert_type)
+                os.makedirs(test_dir, exist_ok=True)
+                
+                # Create detection metadata
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                unique_id = uuid.uuid4().hex[:8]
+                
+                # Extract bounding boxes
+                bboxes = self._extract_bounding_boxes(detection_results)
+                
+                # Save detection frame with bounding boxes
+                detection_image_name = f"test_{alert_type}_{timestamp}_{unique_id}.jpg"
+                detection_image_path = os.path.join(test_dir, detection_image_name)
+                
+                if frame is not None:
+                    annotated_frame = self._draw_bounding_boxes(frame.copy(), bboxes, alert_type)
+                    cv2.imwrite(detection_image_path, annotated_frame)
+                else:
+                    # Create placeholder frame with detection info
+                    placeholder_frame = self._create_placeholder_thumbnail(alert_type, confidence)
+                    cv2.imwrite(detection_image_path, placeholder_frame)
+                
+                # Create detection metadata file
+                metadata = {
+                    'detection_id': unique_id,
+                    'alert_type': alert_type,
+                    'confidence': confidence,
+                    'source_video': source_video_name,
+                    'detection_time': timestamp,
+                    'camera_id': camera.id,
+                    'camera_name': camera.name,
+                    'user_id': camera.user.id,
+                    'user_email': camera.user.email,
+                    'severity': self._determine_test_severity(alert_type, confidence),
+                    'bounding_boxes': bboxes,
+                    'detection_results': str(detection_results) if detection_results else 'N/A'
+                }
+                
+                metadata_file_name = f"test_{alert_type}_{timestamp}_{unique_id}_metadata.json"
+                metadata_file_path = os.path.join(test_dir, metadata_file_name)
+                
+                with open(metadata_file_path, 'w') as f:
+                    json.dump(metadata, f, indent=2)
+                
+                # Determine severity
+                severity = self._determine_test_severity(alert_type, confidence)
+                
+                # Get relative paths for database storage
+                image_relative_path = os.path.relpath(detection_image_path, settings.MEDIA_ROOT)
+                
+                # Create alert with pending_review status
+                alert = Alert.objects.create(
+                    title=f"TEST {alert_type.replace('_', ' ').title()} Detection - {source_video_name}",
+                    description=f"Test detection of {alert_type.replace('_', ' ')} from video file {source_video_name} with {confidence:.2f} confidence. Bounding boxes detected and highlighted.",
+                    alert_type=alert_type,
+                    severity=severity,
+                    confidence=confidence,
+                    camera=camera,
+                    location=f"Test Video: {source_video_name}",
+                    thumbnail=image_relative_path,
+                    status='pending_review',
+                    notes=f"Detected in test video: {source_video_name}. Unique ID: {unique_id}. Bounding boxes: {len(bboxes)}"
+                )
+                
+                # Send notification to reviewers about test detection
+                self._notify_test_reviewers(alert, source_video_name)
+                
+                return alert
+                
+        except Exception as e:
+            logger.error(f"Error creating test detection alert with bounding box: {str(e)}")
+            return None
+    
+    def process_detection_with_video_and_bbox(self, camera, alert_type, confidence, detection_results, frame=None):
+        """
+        Process detection and create video with bounding box highlighting
+        
+        Args:
+            camera: Camera model instance
+            alert_type: Type of detection
+            confidence: Detection confidence
+            detection_results: Detection results from model
+            frame: Current frame (optional)
+            
+        Returns:
+            Alert: Created alert instance or None if failed
+        """
+        try:
+            with transaction.atomic():
+                # Create unique identifier
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                unique_id = uuid.uuid4().hex[:8]
+                
+                # Create output directories
+                video_dir = os.path.join(self.base_output_dir, alert_type)
+                os.makedirs(video_dir, exist_ok=True)
+                
+                # Generate file names
+                video_filename = f"{alert_type}_{timestamp}_{unique_id}.mp4"
+                video_path = os.path.join(video_dir, video_filename)
+                
+                thumbnail_filename = f"{alert_type}_{timestamp}_{unique_id}_thumb.jpg"
+                thumbnail_path = os.path.join(video_dir, thumbnail_filename)
+                
+                # Extract bounding boxes from detection results
+                bboxes = self._extract_bounding_boxes(detection_results)
+                
+                # Start video recording with bounding box overlay
+                recording_success = self._record_detection_video_with_bbox(
+                    camera, video_path, bboxes, alert_type, duration=self.video_clip_duration
+                )
+                
+                if recording_success:
+                    # Create thumbnail from the current frame if available
+                    if frame is not None:
+                        annotated_frame = self._draw_bounding_boxes(frame.copy(), bboxes, alert_type)
+                        cv2.imwrite(thumbnail_path, annotated_frame)
+                    else:
+                        # Create a placeholder thumbnail
+                        placeholder = self._create_placeholder_thumbnail(alert_type, confidence)
+                        cv2.imwrite(thumbnail_path, placeholder)
+                    
+                    # Determine severity
+                    severity = self._determine_severity(alert_type, confidence)
+                    
+                    # Get relative paths for database storage
+                    video_relative_path = os.path.relpath(video_path, settings.MEDIA_ROOT)
+                    thumbnail_relative_path = os.path.relpath(thumbnail_path, settings.MEDIA_ROOT)
+                    
+                    # Create alert
+                    alert = Alert.objects.create(
+                        title=f"{alert_type.replace('_', ' ').title()} Detection",
+                        description=f"Detected {alert_type.replace('_', ' ')} with {confidence:.2f} confidence on camera {camera.name}",
+                        alert_type=alert_type,
+                        severity=severity,
+                        confidence=confidence,
+                        camera=camera,
+                        location=camera.name,
+                        video_file=video_relative_path,
+                        thumbnail=thumbnail_relative_path,
+                        status='pending_review'
+                    )
+                    
+                    logger.info(f"Created alert {alert.id} with bounding box video for {alert_type} detection")
+                    return alert
+                else:
+                    logger.error(f"Failed to record video for {alert_type} detection")
+                    return None
+                    
+        except Exception as e:
+            logger.error(f"Error creating detection alert with video: {str(e)}")
+            return None
+    
+    def _extract_bounding_boxes(self, detection_results):
+        """
+        Extract bounding boxes from YOLO detection results
+        
+        Args:
+            detection_results: YOLO detection results
+            
+        Returns:
+            list: List of bounding box dictionaries
+        """
+        bboxes = []
+        
+        try:
+            for r in detection_results:
+                if r.boxes is not None and len(r.boxes) > 0:
+                    boxes = r.boxes.xyxy.cpu().numpy()  # Get boxes in xyxy format
+                    confidences = r.boxes.conf.cpu().numpy()
+                    
+                    if hasattr(r.boxes, 'cls'):
+                        classes = r.boxes.cls.cpu().numpy()
+                    else:
+                        classes = [0] * len(boxes)  # Default class if not available
+                    
+                    for i, (box, conf, cls) in enumerate(zip(boxes, confidences, classes)):
+                        x1, y1, x2, y2 = box.astype(int)
+                        bboxes.append({
+                            'x1': x1,
+                            'y1': y1,
+                            'x2': x2,
+                            'y2': y2,
+                            'confidence': float(conf),
+                            'class': int(cls),
+                            'class_name': r.names.get(int(cls), 'unknown') if hasattr(r, 'names') else 'unknown'
+                        })
+                        
+        except Exception as e:
+            logger.error(f"Error extracting bounding boxes: {str(e)}")
+            
+        return bboxes
+    
+    def _draw_bounding_boxes(self, frame, bboxes, alert_type):
+        """
+        Draw bounding boxes on frame
+        
+        Args:
+            frame: OpenCV frame
+            bboxes: List of bounding box dictionaries
+            alert_type: Type of detection for color coding
+            
+        Returns:
+            frame: Annotated frame
+        """
+        # Color mapping for different detection types
+        color_map = {
+            'fire_smoke': (0, 0, 255),    # Red
+            'fall': (0, 255, 255),        # Yellow
+            'violence': (0, 165, 255),    # Orange
+            'choking': (255, 0, 0),       # Blue
+            'person': (0, 255, 0)         # Green
+        }
+        
+        color = color_map.get(alert_type, (255, 255, 255))  # Default white
+        
+        for bbox in bboxes:
+            x1, y1, x2, y2 = bbox['x1'], bbox['y1'], bbox['x2'], bbox['y2']
+            confidence = bbox['confidence']
+            class_name = bbox['class_name']
+            
+            # Draw rectangle
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            
+            # Draw label
+            label = f"{class_name}: {confidence:.2f}"
+            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+            
+            # Draw label background
+            cv2.rectangle(frame, (x1, y1 - label_size[1] - 10), 
+                         (x1 + label_size[0], y1), color, -1)
+            
+            # Draw label text
+            cv2.putText(frame, label, (x1, y1 - 5), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        
+        return frame
+    
+    def _record_detection_video_with_bbox(self, camera, output_path, bboxes, alert_type, duration=10):
+        """
+        Record video with bounding box overlay
+        
+        Args:
+            camera: Camera model instance
+            output_path: Path to save the video
+            bboxes: Bounding boxes to draw
+            alert_type: Type of detection
+            duration: Duration in seconds
+            
+        Returns:
+            bool: Success status
+        """
+        try:
+            # Open camera stream
+            cap = cv2.VideoCapture(camera.stream_url)
+            if not cap.isOpened():
+                logger.error(f"Failed to open camera stream: {camera.stream_url}")
+                return False
+            
+            # Get video properties
+            fps = int(cap.get(cv2.CAP_PROP_FPS)) or 20
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            
+            # Setup video writer
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+            
+            # Calculate total frames to record
+            total_frames = fps * duration
+            frames_recorded = 0
+            
+            logger.info(f"Recording video with bounding boxes: {output_path}")
+            
+            while frames_recorded < total_frames:
+                ret, frame = cap.read()
+                if not ret:
+                    logger.warning("Failed to read frame during recording")
+                    break
+                
+                # Draw bounding boxes on frame
+                annotated_frame = self._draw_bounding_boxes(frame.copy(), bboxes, alert_type)
+                
+                # Write frame to video
+                out.write(annotated_frame)
+                frames_recorded += 1
+            
+            # Release resources
+            cap.release()
+            out.release()
+            
+            logger.info(f"Successfully recorded {frames_recorded} frames to {output_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error recording video with bounding boxes: {str(e)}")
+            return False
+    
+    def _create_placeholder_thumbnail(self, alert_type, confidence):
+        """
+        Create a placeholder thumbnail when no frame is available
+        
+        Args:
+            alert_type: Type of detection
+            confidence: Detection confidence
+            
+        Returns:
+            numpy.ndarray: Placeholder image
+        """
+        # Create a blank image
+        placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+        
+        # Add text
+        title = f"{alert_type.replace('_', ' ').title()} Detection"
+        conf_text = f"Confidence: {confidence:.2f}"
+        
+        cv2.putText(placeholder, title, (50, 200), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        cv2.putText(placeholder, conf_text, (50, 250), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
+        return placeholder
     
     def cleanup_old_test_detections(self, days_old=7):
         """
@@ -306,7 +648,7 @@ def create_test_detection_alert(self, camera, alert_type, confidence, detection_
     """
     Create alert for test video detection - to be added to EnhancedVideoProcessor
     """
-    extension = EnhancedVideoProcessorExtension(self.model_manager)
+    extension = EnhancedVideoProcessor(self.model_manager)
     return extension.create_test_detection_alert(
         camera, alert_type, confidence, detection_results, source_video_name
     )

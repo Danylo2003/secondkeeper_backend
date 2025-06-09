@@ -1,5 +1,5 @@
 import os
-from detectors import FireSmokeDetector, FallDetector, ViolenceDetector, ChokingDetector
+from detectors import FireSmokeDetector, FallDetector, ViolenceDetector, ChokingDetector, PersonDetector  
 from django.conf import settings
 import logging
 
@@ -14,7 +14,8 @@ class ModelManager:
             "fire_smoke": FireSmokeDetector(),
             "fall": FallDetector(),
             "violence": ViolenceDetector(),
-            "choking": ChokingDetector()
+            "choking": ChokingDetector(),
+            "person": PersonDetector()
         }
         
         # Current active detector
@@ -30,20 +31,25 @@ class ModelManager:
             "fall": {
                 "conf_threshold": 0.4,
                 "iou_threshold": 0.37,
-                "image_size": 512
+                "image_size": 640
             },
             "violence": {
                 "conf_threshold": 0.35,
                 "iou_threshold": 0.35,
-                "image_size": 736
+                "image_size": 640
             },
             "choking": {
-                "conf_threshold": 0.25,
+                "conf_threshold": 0.35,
                 "iou_threshold": 0.30,
+                "image_size": 640
+            },
+            "person": {
+                "conf_threshold": 0.5,
+                "iou_threshold": 0.45,
                 "image_size": 640
             }
         }
-        
+
     def get_detector(self, detector_key=None):
         """Get a detector by key, or the active detector if no key is provided"""
         if detector_key is None:
