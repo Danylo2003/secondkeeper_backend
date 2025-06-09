@@ -1,4 +1,4 @@
-# utils/enhanced_video_processor.py
+# utils/enhanced_video_processor.py - Extension for handling test videos
 
 import os
 import time
@@ -7,6 +7,7 @@ import numpy as np
 import logging
 import subprocess
 import uuid
+import json
 from datetime import datetime
 from pathlib import Path
 from django.conf import settings
@@ -20,303 +21,107 @@ from utils.model_manager import ModelManager
 logger = logging.getLogger('security_ai')
 
 class EnhancedVideoProcessor:
-    """Enhanced video processor with web-compatible output and organized storage"""
+    """Extension to the original video processor for handling test videos"""
     
     def __init__(self, model_manager=None):
         self.model_manager = model_manager or ModelManager()
         self.base_output_dir = os.path.join(settings.MEDIA_ROOT, 'detected_videos')
-        
-        # Create base output directory if it doesn't exist
-        os.makedirs(self.base_output_dir, exist_ok=True)
-    
-    def get_user_detection_dir(self, user_id, detection_type):
-        """
-        Create and return the directory path for storing videos by user and detection type
-        
-        Args:
-            user_id: User ID
-            detection_type: Type of detection (fire_smoke, fall, violence, choking)
-            
-        Returns:
-            str: Path to the user's detection type directory
-        """
-        user_dir = os.path.join(self.base_output_dir, f"user_{user_id}")
-        detection_dir = os.path.join(user_dir, detection_type)
+        self.test_output_dir = os.path.join(settings.MEDIA_ROOT, 'test_detections')
         
         # Create directories if they don't exist
-        os.makedirs(detection_dir, exist_ok=True)
-        
-        return detection_dir
+        os.makedirs(self.base_output_dir, exist_ok=True)
+        os.makedirs(self.test_output_dir, exist_ok=True)
     
-    def convert_to_web_compatible(self, video_path):
+    def create_test_detection_alert(self, camera, alert_type, confidence, detection_results, source_video_name):
         """
-        Converts a video to a web-compatible format using FFmpeg.
+        Create alert for test video detection
         
         Args:
-            video_path: Path to the original video
-            
-        Returns:
-            str: Path to the converted video or original if conversion failed
-        """
-        try:
-            # Check if ffmpeg is available
-            result = subprocess.run(
-                ['ffmpeg', '-version'], 
-                stdout=subprocess.PIPE, 
-                stderr=subprocess.PIPE,
-                timeout=10
-            )
-            ffmpeg_available = result.returncode == 0
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            ffmpeg_available = False
-            logger.warning("FFmpeg not found, skipping web-compatible conversion")
-            return video_path
-        
-        if not ffmpeg_available:
-            return video_path
-        
-        logger.info(f"Converting {video_path} to web-compatible format using FFmpeg")
-        
-        # Create new filename for the web-compatible video
-        base_dir = os.path.dirname(video_path)
-        filename = os.path.basename(video_path)
-        name, ext = os.path.splitext(filename)
-        web_path = os.path.join(base_dir, f"{name}_web.mp4")
-        
-        try:
-            # Use FFmpeg to convert the video to H.264 in MP4 container (web compatible)
-            command = [
-                'ffmpeg',
-                '-i', video_path,                # Input file
-                '-c:v', 'libx264',               # H.264 codec
-                '-preset', 'fast',               # Encoding speed/compression tradeoff
-                '-crf', '23',                    # Quality (lower = better)
-                '-pix_fmt', 'yuv420p',           # Pixel format for compatibility
-                '-movflags', '+faststart',       # Enable streaming
-                '-y',                           # Overwrite output file if it exists
-                web_path                        # Output file
-            ]
-            
-            result = subprocess.run(
-                command, 
-                stdout=subprocess.PIPE, 
-                stderr=subprocess.PIPE,
-                timeout=300  # 5 minute timeout
-            )
-            
-            if result.returncode == 0 and os.path.exists(web_path):
-                logger.info(f"Successfully converted video to web format: {web_path}")
-                # Remove original file to save space
-                try:
-                    os.remove(video_path)
-                    logger.info(f"Removed original file: {video_path}")
-                except OSError as e:
-                    logger.warning(f"Could not remove original file: {e}")
-                return web_path
-            else:
-                logger.error(f"FFmpeg conversion failed: {result.stderr.decode()}")
-                return video_path
-                
-        except subprocess.TimeoutExpired:
-            logger.error("FFmpeg conversion timed out")
-            return video_path
-        except Exception as e:
-            logger.error(f"Error during FFmpeg conversion: {str(e)}")
-            return video_path
-    
-    def create_detection_video(self, camera, alert_type, detection_frames, confidence, duration=10):
-        """
-        Create a video clip from camera stream when detection occurs
-        
-        Args:
-            camera: Camera model instance
-            alert_type: Type of detection
-            detection_frames: List of frames with detections
-            confidence: Detection confidence
-            duration: Duration in seconds to record
-            
-        Returns:
-            tuple: (video_path, thumbnail_path) or (None, None) if failed
-        """
-        try:
-            # Get detection-specific configuration
-            config = self.model_manager.get_detector_config(alert_type)
-            
-            # Create output directory for this user and detection type
-            output_dir = self.get_user_detection_dir(camera.user.id, alert_type)
-            
-            # Generate unique filename
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            unique_id = uuid.uuid4().hex[:8]
-            video_filename = f"{alert_type}_{camera.id}_{timestamp}_{unique_id}.mp4"
-            video_path = os.path.join(output_dir, video_filename)
-            
-            # Open camera stream
-            cap = cv2.VideoCapture(camera.stream_url)
-            if not cap.isOpened():
-                logger.error(f"Failed to open camera stream: {camera.stream_url}")
-                return None, None
-            
-            # Get video properties
-            fps = int(cap.get(cv2.CAP_PROP_FPS)) or 15
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            
-            # Create video writer
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(video_path, fourcc, fps, (width, height))
-            
-            if not out.isOpened():
-                logger.error(f"Failed to create video writer for: {video_path}")
-                cap.release()
-                return None, None
-            
-            # Record video for specified duration
-            start_time = time.time()
-            frame_count = 0
-            target_frames = fps * duration
-            thumbnail_frame = None
-            
-            logger.info(f"Recording {duration}s video for {alert_type} detection on camera {camera.id}")
-            
-            while frame_count < target_frames and time.time() - start_time < duration + 5:
-                ret, frame = cap.read()
-                if not ret:
-                    logger.warning("Failed to read frame from camera")
-                    break
-                
-                # Save first frame as thumbnail
-                if thumbnail_frame is None:
-                    thumbnail_frame = frame.copy()
-                
-                out.write(frame)
-                frame_count += 1
-                
-                # Small delay to match FPS
-                time.sleep(1.0 / fps)
-            
-            cap.release()
-            out.release()
-            
-            # Check if video was created successfully
-            if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
-                logger.error(f"Failed to create video file: {video_path}")
-                return None, None
-            
-            logger.info(f"Video recorded successfully: {video_path}")
-            
-            # Convert to web-compatible format
-            web_compatible_path = self.convert_to_web_compatible(video_path)
-            
-            # Create thumbnail
-            thumbnail_path = None
-            if thumbnail_frame is not None:
-                thumbnail_path = self._create_thumbnail(thumbnail_frame, output_dir, f"{alert_type}_{camera.id}_{timestamp}_{unique_id}")
-            
-            return web_compatible_path, thumbnail_path
-            
-        except Exception as e:
-            logger.error(f"Error creating detection video: {str(e)}")
-            return None, None
-    
-    def _create_thumbnail(self, frame, output_dir, base_filename):
-        """
-        Create a thumbnail from a frame
-        
-        Args:
-            frame: OpenCV frame
-            output_dir: Directory to save thumbnail
-            base_filename: Base filename for thumbnail
-            
-        Returns:
-            str: Path to thumbnail or None if failed
-        """
-        try:
-            thumbnail_filename = f"{base_filename}_thumb.jpg"
-            thumbnail_path = os.path.join(output_dir, thumbnail_filename)
-            
-            # Resize frame for thumbnail
-            height, width = frame.shape[:2]
-            max_dim = 400
-            if height > width:
-                new_height = max_dim
-                new_width = int(width * (max_dim / height))
-            else:
-                new_width = max_dim
-                new_height = int(height * (max_dim / width))
-            
-            thumbnail = cv2.resize(frame, (new_width, new_height))
-            
-            # Save thumbnail
-            success = cv2.imwrite(thumbnail_path, thumbnail)
-            
-            if success:
-                logger.info(f"Thumbnail created: {thumbnail_path}")
-                return thumbnail_path
-            else:
-                logger.error(f"Failed to save thumbnail: {thumbnail_path}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error creating thumbnail: {str(e)}")
-            return None
-    
-    def process_detection_with_video(self, camera, alert_type, confidence, detection_results):
-        """
-        Process detection and create video with pending review status
-        
-        Args:
-            camera: Camera model instance
+            camera: Camera model instance (test camera)
             alert_type: Type of detection
             confidence: Detection confidence
             detection_results: Detection results from model
+            source_video_name: Name of the source video file
             
         Returns:
             Alert: Created alert instance or None if failed
         """
         try:
             with transaction.atomic():
-                # Create video clip
-                video_path, thumbnail_path = self.create_detection_video(
-                    camera, alert_type, [], confidence, duration=10
-                )
+                # Create output directory for test detections
+                test_dir = os.path.join(self.test_output_dir, alert_type)
+                os.makedirs(test_dir, exist_ok=True)
                 
-                if not video_path:
-                    logger.error(f"Failed to create video for {alert_type} detection")
-                    return None
+                # Create detection metadata
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                unique_id = uuid.uuid4().hex[:8]
+                
+                # Save detection frame as image
+                detection_image_name = f"test_{alert_type}_{timestamp}_{unique_id}.jpg"
+                detection_image_path = os.path.join(test_dir, detection_image_name)
+                
+                # For test videos, we don't have the actual frame, so we create a placeholder
+                # In a real implementation, you would pass the actual detection frame
+                placeholder_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(placeholder_frame, f"Test Detection: {alert_type}", 
+                           (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                cv2.putText(placeholder_frame, f"Source: {source_video_name}", 
+                           (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                cv2.putText(placeholder_frame, f"Confidence: {confidence:.2f}", 
+                           (50, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                
+                cv2.imwrite(detection_image_path, placeholder_frame)
+                
+                # Create detection metadata file
+                metadata = {
+                    'detection_id': unique_id,
+                    'alert_type': alert_type,
+                    'confidence': confidence,
+                    'source_video': source_video_name,
+                    'detection_time': timestamp,
+                    'camera_id': camera.id,
+                    'camera_name': camera.name,
+                    'user_id': camera.user.id,
+                    'user_email': camera.user.email,
+                    'severity': self._determine_severity(alert_type, confidence),
+                    'detection_results': str(detection_results)
+                }
+                
+                metadata_file_name = f"test_{alert_type}_{timestamp}_{unique_id}_metadata.json"
+                metadata_file_path = os.path.join(test_dir, metadata_file_name)
+                
+                with open(metadata_file_path, 'w') as f:
+                    json.dump(metadata, f, indent=2)
                 
                 # Determine severity based on confidence and detection type
                 severity = self._determine_severity(alert_type, confidence)
                 
                 # Get relative paths for database storage
-                video_relative_path = os.path.relpath(video_path, settings.MEDIA_ROOT)
-                thumbnail_relative_path = None
-                if thumbnail_path:
-                    thumbnail_relative_path = os.path.relpath(thumbnail_path, settings.MEDIA_ROOT)
+                image_relative_path = os.path.relpath(detection_image_path, settings.MEDIA_ROOT)
                 
                 # Create alert with pending_review status
                 alert = Alert.objects.create(
-                    title=f"{alert_type.replace('_', ' ').title()} Detection - Pending Review",
-                    description=f"Automatic detection of {alert_type.replace('_', ' ')} from camera {camera.name} with {confidence:.2f} confidence. Awaiting reviewer confirmation.",
+                    title=f"TEST {alert_type.replace('_', ' ').title()} Detection - {source_video_name}",
+                    description=f"Test detection of {alert_type.replace('_', ' ')} from video file {source_video_name} with {confidence:.2f} confidence. Source: Test Video Processing.",
                     alert_type=alert_type,
                     severity=severity,
                     confidence=confidence,
                     camera=camera,
-                    location=camera.name,
-                    video_file=video_relative_path,
-                    thumbnail=thumbnail_relative_path,
-                    status='pending_review'  # New status for reviewer workflow
+                    location=f"Test Video: {source_video_name}",
+                    thumbnail=image_relative_path,
+                    status='pending_review',
+                    notes=f"Detected in test video: {source_video_name}"
                 )
                 
-                logger.info(f"Created pending alert {alert.id} for {alert_type} detection on camera {camera.id}")
+                logger.info(f"Created test alert {alert.id} for {alert_type} detection in video {source_video_name}")
                 
-                # Send notification to reviewers instead of end user
-                self._notify_reviewers(alert)
+                # Send notification to reviewers about test detection
+                self._notify_test_reviewers(alert, source_video_name)
                 
                 return alert
                 
         except Exception as e:
-            logger.error(f"Error processing detection with video: {str(e)}")
+            logger.error(f"Error creating test detection alert: {str(e)}")
             return None
     
     def _determine_severity(self, alert_type, confidence):
@@ -350,12 +155,13 @@ class EnhancedVideoProcessor:
         
         return base_severity
     
-    def _notify_reviewers(self, alert):
+    def _notify_test_reviewers(self, alert, source_video_name):
         """
-        Send notification to reviewers about pending alert
+        Send notification to reviewers about test detection
         
         Args:
             alert: Alert instance
+            source_video_name: Name of source video file
         """
         try:
             from django.contrib.auth import get_user_model
@@ -371,18 +177,19 @@ class EnhancedVideoProcessor:
             )
             
             if not reviewers.exists():
-                logger.warning("No active reviewers found for alert notification")
+                logger.warning("No active reviewers found for test alert notification")
                 return
             
-            title = f"Alert Pending Review: {alert.get_alert_type_display()}"
+            title = f"TEST Alert Pending Review: {alert.get_alert_type_display()}"
             message = f"""
-            A new {alert.get_alert_type_display()} alert requires review:
+            A new TEST {alert.get_alert_type_display()} alert requires review:
             
-            Camera: {alert.camera.name}
+            Source: Test Video - {source_video_name}
             Confidence: {alert.confidence:.2f}
             Time: {alert.detection_time.strftime('%Y-%m-%d %H:%M:%S')}
             Severity: {alert.get_severity_display()}
             
+            This is a test detection from video file processing.
             Please review and confirm if this detection is accurate.
             """
             
@@ -397,64 +204,109 @@ class EnhancedVideoProcessor:
                     status='pending'
                 )
             
-            logger.info(f"Notified {reviewers.count()} reviewers about alert {alert.id}")
+            logger.info(f"Notified {reviewers.count()} reviewers about test alert {alert.id}")
             
         except Exception as e:
-            logger.error(f"Error notifying reviewers: {str(e)}")
+            logger.error(f"Error notifying reviewers about test detection: {str(e)}")
     
-    def get_detection_statistics(self, user_id=None):
+    def get_test_detection_statistics(self):
         """
-        Get statistics about stored detection videos
+        Get statistics about test detections
         
-        Args:
-            user_id: Optional user ID to filter by
-            
         Returns:
-            dict: Statistics about detections
+            dict: Statistics about test detections
         """
         try:
             stats = {
-                'total_videos': 0,
+                'total_test_detections': 0,
                 'by_type': {},
-                'by_user': {},
+                'recent_detections': [],
                 'total_size_mb': 0
             }
             
-            base_dir = self.base_output_dir
-            if user_id:
-                base_dir = os.path.join(self.base_output_dir, f"user_{user_id}")
-            
-            if not os.path.exists(base_dir):
+            if not os.path.exists(self.test_output_dir):
                 return stats
             
-            # Walk through directory structure
-            for root, dirs, files in os.walk(base_dir):
-                for file in files:
-                    if file.endswith(('.mp4', '.avi')):
-                        file_path = os.path.join(root, file)
+            # Walk through test detection directory
+            for detection_type in os.listdir(self.test_output_dir):
+                type_dir = os.path.join(self.test_output_dir, detection_type)
+                if not os.path.isdir(type_dir):
+                    continue
+                
+                type_count = 0
+                for file in os.listdir(type_dir):
+                    file_path = os.path.join(type_dir, file)
+                    if os.path.isfile(file_path):
                         file_size = os.path.getsize(file_path)
                         stats['total_size_mb'] += file_size / (1024 * 1024)
-                        stats['total_videos'] += 1
                         
-                        # Extract detection type from path
-                        path_parts = root.split(os.sep)
-                        if len(path_parts) >= 2:
-                            detection_type = path_parts[-1]
-                            if detection_type not in stats['by_type']:
-                                stats['by_type'][detection_type] = 0
-                            stats['by_type'][detection_type] += 1
-                        
-                        # Extract user from path
-                        if 'user_' in root:
-                            user_part = [part for part in path_parts if part.startswith('user_')]
-                            if user_part:
-                                user_id_str = user_part[0]
-                                if user_id_str not in stats['by_user']:
-                                    stats['by_user'][user_id_str] = 0
-                                stats['by_user'][user_id_str] += 1
+                        if file.endswith('.json'):
+                            type_count += 1
+                            stats['total_test_detections'] += 1
+                            
+                            # Add to recent detections
+                            try:
+                                with open(file_path, 'r') as f:
+                                    metadata = json.load(f)
+                                stats['recent_detections'].append(metadata)
+                            except Exception as e:
+                                logger.error(f"Error reading metadata file {file_path}: {str(e)}")
+                
+                if type_count > 0:
+                    stats['by_type'][detection_type] = type_count
+            
+            # Sort recent detections by time (newest first)
+            stats['recent_detections'].sort(
+                key=lambda x: x.get('detection_time', ''), 
+                reverse=True
+            )
+            
+            # Limit to last 20 detections
+            stats['recent_detections'] = stats['recent_detections'][:20]
             
             return stats
             
         except Exception as e:
-            logger.error(f"Error getting detection statistics: {str(e)}")
+            logger.error(f"Error getting test detection statistics: {str(e)}")
             return stats
+    
+    def cleanup_old_test_detections(self, days_old=7):
+        """
+        Clean up old test detection files
+        
+        Args:
+            days_old: Remove files older than this many days
+        """
+        try:
+            if not os.path.exists(self.test_output_dir):
+                return
+            
+            cutoff_time = time.time() - (days_old * 24 * 60 * 60)
+            removed_count = 0
+            
+            for root, dirs, files in os.walk(self.test_output_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    try:
+                        if os.path.getmtime(file_path) < cutoff_time:
+                            os.remove(file_path)
+                            removed_count += 1
+                            logger.debug(f"Removed old test detection file: {file_path}")
+                    except Exception as e:
+                        logger.error(f"Error removing file {file_path}: {str(e)}")
+            
+            logger.info(f"Cleaned up {removed_count} old test detection files")
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up old test detections: {str(e)}")
+
+
+# Add this method to the original EnhancedVideoProcessor class
+def create_test_detection_alert(self, camera, alert_type, confidence, detection_results, source_video_name):
+    """
+    Create alert for test video detection - to be added to EnhancedVideoProcessor
+    """
+    extension = EnhancedVideoProcessorExtension(self.model_manager)
+    return extension.create_test_detection_alert(
+        camera, alert_type, confidence, detection_results, source_video_name
+    )

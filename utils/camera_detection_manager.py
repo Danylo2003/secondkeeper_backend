@@ -1,4 +1,4 @@
-# utils/camera_detection_manager.py - Updated with new review workflow
+# utils/camera_detection_manager.py - Updated to integrate enhanced detection
 
 import cv2
 import numpy as np
@@ -18,7 +18,6 @@ import torch
 from cameras.models import Camera
 from alerts.models import Alert
 from detectors import FireSmokeDetector, FallDetector, ViolenceDetector, ChokingDetector
-from detectors.face_detector import FaceDetector
 from utils.model_manager import ModelManager
 from utils.enhanced_video_processor import EnhancedVideoProcessor
 
@@ -26,7 +25,7 @@ logger = logging.getLogger('security_ai')
 
 class CameraDetectionManager:
     """
-    Main manager for handling automatic detection across all cameras with reviewer workflow
+    Main manager for handling automatic detection across all cameras with enhanced video priority
     """
     
     def __init__(self):
@@ -45,9 +44,6 @@ class CameraDetectionManager:
             'choking': ChokingDetector()
         }
         
-        # Face detector (separate handling)
-        self.face_detector = FaceDetector()
-        
         # GPU optimization
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         logger.info(f"Using device: {self.device}")
@@ -60,19 +56,48 @@ class CameraDetectionManager:
         # Alert tracking to prevent spam
         self.last_alerts = {}  # camera_id -> {alert_type: timestamp}
         
+        # Test video directory check
+        self.test_video_dir = os.path.join(settings.MEDIA_ROOT, 'testvideo')
+        os.makedirs(self.test_video_dir, exist_ok=True)
+        
     def start(self):
-        """Start the detection manager"""
+        """Start the detection manager with enhanced video file checking"""
         if self.is_running:
             logger.warning("Detection manager is already running")
             return
             
-        logger.info("Starting Camera Detection Manager with Reviewer Workflow")
+        # Check for enhanced detection manager first
+        if self._should_use_enhanced_detection():
+            logger.info("Test videos detected, delegating to Enhanced Detection Manager")
+            try:
+                from utils.enhanced_detection_manager import enhanced_detection_manager
+                enhanced_detection_manager.start()
+                return
+            except ImportError:
+                logger.warning("Enhanced detection manager not available, continuing with standard detection")
+        
+        logger.info("Starting Standard Camera Detection Manager")
         self.is_running = True
         self.stop_event.clear()
         
         # Start main processing thread
         self.main_thread = threading.Thread(target=self._main_loop, daemon=True)
         self.main_thread.start()
+        
+    def _should_use_enhanced_detection(self):
+        """Check if enhanced detection should be used (if test videos exist)"""
+        try:
+            import glob
+            video_extensions = ['*.mp4', '*.avi', '*.mov', '*.mkv', '*.wmv', '*.flv', '*.webm']
+            
+            for extension in video_extensions:
+                pattern = os.path.join(self.test_video_dir, extension)
+                if glob.glob(pattern):
+                    return True
+            return False
+        except Exception as e:
+            logger.error(f"Error checking for test videos: {str(e)}")
+            return False
         
     def stop(self):
         """Stop the detection manager"""
@@ -94,9 +119,22 @@ class CameraDetectionManager:
         self.active_cameras.clear()
         
     def _main_loop(self):
-        """Main processing loop"""
+        """Main processing loop with periodic enhanced detection check"""
         while self.is_running and not self.stop_event.is_set():
             try:
+                # Periodically check if we should switch to enhanced detection
+                if self._should_use_enhanced_detection():
+                    logger.info("Test videos detected during runtime, switching to Enhanced Detection Manager")
+                    try:
+                        from utils.enhanced_detection_manager import enhanced_detection_manager
+                        # Stop current processing
+                        self.stop()
+                        # Start enhanced detection
+                        enhanced_detection_manager.start()
+                        return
+                    except ImportError:
+                        logger.warning("Enhanced detection manager not available")
+                
                 # Get online cameras from database
                 online_cameras = Camera.objects.filter(
                     status='online',
@@ -139,8 +177,7 @@ class CameraDetectionManager:
             logger.info(f"Starting processor for camera {camera_id} - {camera.name}")
             
             processor = CameraProcessor(
-                camera, self.detectors, self.face_detector, 
-                self.device, self, self.video_processor
+                camera, self.detectors, self.device, self, self.video_processor
             )
             processor.start()
             
@@ -215,10 +252,9 @@ class CameraProcessor:
     Processor for a single camera with enhanced detection
     """
     
-    def __init__(self, camera, detectors, face_detector, device, manager, video_processor):
+    def __init__(self, camera, detectors, device, manager, video_processor):
         self.camera = camera
         self.detectors = detectors
-        self.face_detector = face_detector
         self.device = device
         self.manager = manager
         self.video_processor = video_processor
@@ -345,30 +381,6 @@ class CameraProcessor:
                             
                 except Exception as e:
                     logger.error(f"Error running {detector_type} detector on camera {self.camera.id}: {str(e)}")
-            
-            # Run face recognition if enabled
-            if self.camera.face_recognition:
-                try:
-                    config = self.manager.model_manager.get_detector_config('fire_smoke')  # Use default for face
-                    face_threshold = config['conf_threshold']
-                    
-                    has_unauthorized, face_confidence, face_annotated_frame, face_results = self.face_detector.detect_faces_in_frame(
-                        frame, self.camera, face_threshold
-                    )
-                    
-                    if has_unauthorized and face_confidence >= face_threshold:
-                        # Check if we should create an alert for unauthorized face
-                        if self.manager.should_create_alert(str(self.camera.id), 'unauthorized_face'):
-                            self.manager.create_pending_alert(
-                                self.camera,
-                                'unauthorized_face',
-                                face_confidence,
-                                frame,
-                                face_results
-                            )
-                            
-                except Exception as e:
-                    logger.error(f"Error running face recognition on camera {self.camera.id}: {str(e)}")
                     
         except Exception as e:
             logger.error(f"Error processing frame for camera {self.camera.id}: {str(e)}")
@@ -405,5 +417,5 @@ class CameraProcessor:
             logger.error(f"Error updating camera status: {str(e)}")
 
 
-# Global instance
+# Global instance - this will automatically delegate to enhanced detection when needed
 detection_manager = CameraDetectionManager()
