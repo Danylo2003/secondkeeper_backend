@@ -21,7 +21,7 @@ from .serializers import (
 )
 from cameras.models import Camera
 from alerts.models import Alert
-from utils.permissions import IsAdminUser, IsManagerOrAdmin, CanAddRoles
+from utils.permissions import IsAdminUser, IsManagerOrAdminOrReviewer, CanAddRoles
 from accounts.serializers import UserCreateSerializer
 
 User = get_user_model()
@@ -30,7 +30,7 @@ logger = logging.getLogger('security_ai')
 class UserAdminViewSet(viewsets.ModelViewSet):
     """ViewSet for admin management of users."""
     
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdminOrReviewer]
     serializer_class = UserAdminSerializer
     
     def get_queryset(self):
@@ -168,7 +168,9 @@ class UserAdminViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def user_permissions(self, request):
         """Get current user's permissions for UI display"""
+        print("User Permissions Check for:", request.user)
         user = request.user
+        
         
         permissions_data = {
             'can_add_roles': user.can_add_roles(),
@@ -285,7 +287,7 @@ class UserAdminViewSet(viewsets.ModelViewSet):
 class CameraAdminViewSet(viewsets.ModelViewSet):
     """ViewSet for admin management of cameras."""
     
-    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsManagerOrAdminOrReviewer]
     
     def get_queryset(self):
         """Get all cameras with user annotations."""

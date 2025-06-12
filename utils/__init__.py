@@ -2,7 +2,7 @@
 
 from .model_manager import ModelManager
 from .enhanced_video_processor import EnhancedVideoProcessor
-from .permissions import IsOwnerOrAdmin, IsAdminUser, IsManagerOrAdmin
+from .permissions import IsOwnerOrAdmin, IsAdminUser, IsManagerOrAdminOrReviewer
 from .exception_handlers import custom_exception_handler
 from .stream_proxy import StreamProxy
 
@@ -20,7 +20,7 @@ __all__ = [
     'EnhancedVideoProcessor', 
     'IsOwnerOrAdmin',
     'IsAdminUser',
-    'IsManagerOrAdmin',
+    'IsManagerOrAdminOrReviewer',
     'custom_exception_handler',
     'StreamProxy',
     'detection_manager',

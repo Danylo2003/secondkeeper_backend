@@ -44,7 +44,7 @@ class IsAdminUser(permissions.BasePermission):
             request.user.is_admin()
         )
 
-class IsManagerOrAdmin(permissions.BasePermission):
+class IsManagerOrAdminOrReviewer(permissions.BasePermission):
     """
     Custom permission to only allow managers or admins to access the view.
     """
@@ -54,7 +54,7 @@ class IsManagerOrAdmin(permissions.BasePermission):
             request.user and 
             request.user.is_authenticated and 
             request.user.is_active and
-            request.user.role in ['admin', 'manager']
+            request.user.role in ['admin', 'manager', 'reviewer']
         )
 
 class CanAddRoles(permissions.BasePermission):
