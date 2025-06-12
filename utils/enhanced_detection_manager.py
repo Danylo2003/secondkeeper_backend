@@ -603,7 +603,7 @@ class EnhancedCameraProcessor:
                     continue
 
                 # Process frame with all enabled detectors
-                self._process_frame(frame, video_fps, frame_width, frame_height)
+                self._process_frame(frame, camera_fps, frame_width, frame_height)
 
         except Exception as e:
             logger.error(f"Error in camera {self.camera.id} processing loop: {str(e)}")

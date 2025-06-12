@@ -41,6 +41,7 @@ class CamerasConfig(AppConfig):
                     try:
                         from utils.camera_detection_manager import detection_manager
                         logger.info("Falling back to original detection manager...")
+                        print("camera detection manager ===========>")
                         detection_manager.start()
                         logger.info("Original Camera Detection Service started as fallback")
                     except Exception as e2:
