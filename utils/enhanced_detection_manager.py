@@ -38,6 +38,7 @@ class EnhancedDetectionManager:
         self.is_running = False
         self.main_thread = None
         self.stop_event = threading.Event()
+        self.video_writer = None
         
         # Test video directory
         self.test_video_dir = os.path.join(settings.MEDIA_ROOT, 'testvideo')
@@ -165,6 +166,7 @@ class EnhancedDetectionManager:
                 
     def _process_camera_streams(self):
         """Process camera streams when no video files are present"""
+        print("Processing camera streams...")
         # Get online cameras from database
         online_cameras = Camera.objects.filter(
             status='online',
@@ -281,9 +283,9 @@ class EnhancedDetectionManager:
             return True
             
         return False
-        
+    
     def create_test_alert(self, source_name, alert_type, confidence, frame, detection_results):
-        """Create alert for test video detection"""
+        """Create alert for test video detection with bounding box video"""
         try:
             # Create a mock camera for test videos
             from django.contrib.auth import get_user_model
@@ -310,22 +312,21 @@ class EnhancedDetectionManager:
                 }
             )
             
-            # Create pending alert
-            alert = self.video_processor.create_test_detection_alert(
-                test_camera, alert_type, confidence, detection_results, source_name
+            # Create alert with bounding box video
+            alert = self.video_processor.create_test_detection_alert_with_bbox(
+                test_camera, alert_type, confidence, detection_results, source_name, frame
             )
             
             if alert:
-                logger.info(f"Created test alert {alert.id} for {alert_type} detection in {source_name}")
+                logger.info(f"Created test alert {alert.id} with bounding box video for {alert_type} detection in {source_name}")
                 return alert
             else:
-                logger.error(f"Failed to create test alert for {alert_type} detection")
+                logger.error(f"Failed to create test alert with bounding box video for {alert_type} detection")
                 return None
                 
         except Exception as e:
-            logger.error(f"Error creating test alert: {str(e)}")
+            logger.error(f"Error creating test alert with bounding box video: {str(e)}")
             return None
-
 
 class VideoFileProcessor:
     """
@@ -349,6 +350,7 @@ class VideoFileProcessor:
         self.confidence_threshold = 0.5
         self.iou_threshold = 0.45
         self.image_size = 640
+        self.video_writer = None
         
     def start(self):
         """Start processing this video file"""
@@ -368,6 +370,7 @@ class VideoFileProcessor:
     def _process_loop(self):
         """Main processing loop for this video file"""
         try:
+            self.video_writer = None
             # Open video file
             self.cap = cv2.VideoCapture(self.video_file)
             if not self.cap.isOpened():
@@ -379,10 +382,18 @@ class VideoFileProcessor:
             # Get video properties
             total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
             fps = self.cap.get(cv2.CAP_PROP_FPS)
+            frame_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             duration = total_frames / fps if fps > 0 else 0
-            
             logger.info(f"Video properties - Total frames: {total_frames}, FPS: {fps}, Duration: {duration:.2f}s")
-            
+            fourcc = cv2.VideoWriter_fourcc(*'XVID')
+            self.video_writer = cv2.VideoWriter(
+                    "output.avi",
+                    fourcc,
+                    fps,
+                    (frame_width, frame_height)
+                )
+
             while self.is_running:
                 ret, frame = self.cap.read()
                 if not ret:
@@ -396,7 +407,7 @@ class VideoFileProcessor:
                     continue
                     
                 # Process frame with all detectors
-                self._process_frame(frame)
+                self._process_frame(frame, fps, frame_width, frame_height)
                 
                 # Small delay to prevent overwhelming the system
                 time.sleep(0.1)
@@ -407,13 +418,42 @@ class VideoFileProcessor:
             if self.cap:
                 self.cap.release()
                 
-    def _process_frame(self, frame):
+    def _process_frame(self, frame, fps, frame_width, frame_height):
         """Process a single frame with all detectors"""
         try:
+            person_detector = self.detectors.get('person')
+            if person_detector is None:
+                # Add person detector if not available
+                from detectors import PersonDetector
+                person_detector = PersonDetector()
+                self.detectors['person'] = person_detector
+                
+            # Get person detection configuration
+            person_config = self.manager.model_manager.get_detector_config('person')
+            person_conf_threshold = person_config['conf_threshold']
+            person_iou_threshold = person_config['iou_threshold']
+            person_image_size = person_config['image_size']
+
+            # Run person detection
+            person_annotated_frame, person_results = person_detector.predict_video_frame(
+                'person',
+                frame, 
+                person_conf_threshold,
+                person_iou_threshold,
+                person_image_size
+            )
+            # Check if person is detected
+            has_person, person_confidence = self._check_detection_results(person_results, person_conf_threshold)
+            print("has_person =====> :", has_person, " person_confidence: ", person_confidence, " person_conf_threshold: ", person_conf_threshold)
             # Check each detector
-            detectors_to_run = ['fire_smoke', 'fall', 'violence', 'choking']
-            
-            # Run object detection models
+            detectors_to_run = []
+            if has_person:
+                # Person detected - check for fall, choking, violence
+                detectors_to_run.extend(['fall', 'violence', 'choking'])
+            else:
+                # No person detected - check for fire/smoke
+                detectors_to_run.append('fire_smoke')
+
             for detector_type in detectors_to_run:
                 try:
                     detector = self.detectors[detector_type]
@@ -427,18 +467,22 @@ class VideoFileProcessor:
                     
                     # Run detection
                     annotated_frame, results = detector.predict_video_frame(
+                        detector_type,
                         frame, 
                         conf_threshold,
                         iou_threshold,
                         image_size
                     )
+                    self.video_writer.write(annotated_frame)
                     
                     # Check for detections
                     has_detection, max_confidence = self._check_detection_results(results, conf_threshold)
+                    print("has_detection =====> :", has_detection, " max_confidence: ", max_confidence, " conf_threshold: ", conf_threshold)
                     
                     if has_detection and max_confidence >= conf_threshold:
                         # Check if we should create an alert
                         source_id = f"video_{self.video_name}"
+                        print("source_id  ============> :", source_id, " detector_type: ", detector_type)
                         if self.manager.should_create_alert(source_id, detector_type):
                             # Create test alert
                             self.manager.create_test_alert(
@@ -454,6 +498,8 @@ class VideoFileProcessor:
                 
         except Exception as e:
             logger.error(f"Error processing frame for video {self.video_name}: {str(e)}")
+            if self.video_writer is not None and hasattr(self.video_writer, 'release'):
+                self.video_writer.release()
             
     def _check_detection_results(self, results, conf_threshold):
         """Check detection results for valid detections"""
@@ -525,6 +571,8 @@ class EnhancedCameraProcessor:
     def _process_loop(self):
         """Main processing loop for this camera"""
         try:
+            self.video_writer = None
+            print("Opening camera stream... ", self.camera.stream_url)
             # Open camera stream
             self.cap = cv2.VideoCapture(self.camera.stream_url)
             if not self.cap.isOpened():
@@ -534,7 +582,13 @@ class EnhancedCameraProcessor:
                 
             self._update_camera_status('online')
             logger.info(f"Started processing camera {self.camera.id} - {self.camera.name}")
-            
+
+            camera_fps = self.cap.get(cv2.CAP_PROP_FPS)
+            frame_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            self.video_writer = cv2.VideoWriter(f"output_{self.camera.id}.mp4", fourcc, camera_fps, (frame_width, frame_height))
+
             while self.is_running:
                 ret, frame = self.cap.read()
                 if not ret:
@@ -547,10 +601,10 @@ class EnhancedCameraProcessor:
                 # Skip frames for performance
                 if self.frame_count % self.manager.frame_skip != 0:
                     continue
-                    
+
                 # Process frame with all enabled detectors
-                self._process_frame(frame)
-                
+                self._process_frame(frame, video_fps, frame_width, frame_height)
+
         except Exception as e:
             logger.error(f"Error in camera {self.camera.id} processing loop: {str(e)}")
             self._update_camera_status('error')
@@ -558,7 +612,7 @@ class EnhancedCameraProcessor:
             if self.cap:
                 self.cap.release()
 
-    def _process_frame(self, frame):
+    def _process_frame(self, frame, fps, width, height):
         """Process a single frame with conditional detection logic for video files"""
         try:
             # First, check for people using person detector
@@ -577,6 +631,7 @@ class EnhancedCameraProcessor:
             
             # Run person detection
             person_annotated_frame, person_results = person_detector.predict_video_frame(
+                'person',
                 frame, 
                 person_conf_threshold,
                 person_iou_threshold,
@@ -608,18 +663,20 @@ class EnhancedCameraProcessor:
                     
                     # Run detection
                     annotated_frame, results = detector.predict_video_frame(
+                        detector_type,
                         frame, 
                         conf_threshold,
                         iou_threshold,
                         image_size
                     )
-                    
+                    self.video_writer.write(annotated_frame)
+
                     # Check for detections
                     has_detection, max_confidence = self._check_detection_results(results, conf_threshold)
                     
                     if has_detection and max_confidence >= conf_threshold:
                         # Check if we should create an alert
-                        source_id = f"video_{self.video_name}"
+                        source_id = f"video_{self.camera.id}"
                         if self.manager.should_create_alert(source_id, detector_type):
                             # Create test alert with bounding box
                             self._create_test_alert_with_bbox(
@@ -683,12 +740,13 @@ class EnhancedCameraProcessor:
         """Create test alert with bounding box highlighting"""
         try:
             # Create test alert with bounding box video
-            self.manager.create_test_alert_with_bbox(
+            alert = self.manager.video_processor.create_test_detection_alert_with_bbox(
+                test_camera,
+                detector_type, 
+                max_confidence,
+                results,
                 self.video_name,
-                detector_type,
-                confidence,
-                frame,
-                detection_results
+                frame
             )
             
         except Exception as e:

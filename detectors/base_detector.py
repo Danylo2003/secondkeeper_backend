@@ -6,6 +6,7 @@ from PIL import Image
 import os
 from django.conf import settings
 import logging
+import torch
 
 logger = logging.getLogger('security_ai')
 
@@ -62,12 +63,18 @@ class BaseDetector(ABC):
             logger.error(f"Error in predict_image: {str(e)}")
             raise
     
-    def predict_video_frame(self, frame, conf_threshold, iou_threshold, image_size):
+    def predict_video_frame(self, detect_type, frame, conf_threshold, iou_threshold, image_size):
         """Process a single video frame using the detector's model"""
         # Ensure model is loaded
         model = self.load_model()
         
         try:
+            # Set classes parameter if filtering for person
+            classes = None
+            if detect_type == "person":
+                # COCO dataset person class ID is 0
+                classes = [0]  # Person class in COCO/YOLOv8
+            
             # Run prediction on the frame
             results = model.predict(
                 source=frame,
@@ -76,17 +83,21 @@ class BaseDetector(ABC):
                 show_labels=True,
                 show_conf=True,
                 imgsz=image_size,
+                classes=classes,  # Filter classes at prediction time
             )
             
             # Get the annotated frame
+            annotated_frame = None
             for r in results:
                 annotated_frame = r.plot()
-                
+                break
+
             return annotated_frame, results
+            
         except Exception as e:
             logger.error(f"Error in predict_video_frame: {str(e)}")
             raise
-    
+
     @abstractmethod
     def get_description(self):
         """Return a description of the detector"""

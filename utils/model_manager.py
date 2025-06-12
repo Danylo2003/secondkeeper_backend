@@ -24,7 +24,7 @@ class ModelManager:
         # Default configuration parameters for each detector
         self.detector_configs = {
             "fire_smoke": {
-                "conf_threshold": 0.5,
+                "conf_threshold": 0.7,
                 "iou_threshold": 0.45,
                 "image_size": 640
             },
