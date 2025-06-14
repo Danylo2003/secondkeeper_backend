@@ -575,19 +575,19 @@ class EnhancedCameraProcessor:
             print("Opening camera stream... ", self.camera.stream_url)
             # Open camera stream
             self.cap = cv2.VideoCapture(self.camera.stream_url)
-            if not self.cap.isOpened():
-                logger.error(f"Failed to open camera {self.camera.id}: {self.camera.stream_url}")
-                self._update_camera_status('offline')
-                return
+            # if not self.cap.isOpened():
+            #     logger.error(f"Failed to open camera {self.camera.id}: {self.camera.stream_url}")
+            #     self._update_camera_status('online')
+            #     # return
                 
-            self._update_camera_status('online')
-            logger.info(f"Started processing camera {self.camera.id} - {self.camera.name}")
+            # self._update_camera_status('online')
+            # logger.info(f"Started processing camera {self.camera.id} - {self.camera.name}")
 
             camera_fps = self.cap.get(cv2.CAP_PROP_FPS)
             frame_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            self.video_writer = cv2.VideoWriter(f"output_{self.camera.id}.mp4", fourcc, camera_fps, (frame_width, frame_height))
+            fourcc = cv2.VideoWriter_fourcc(*'XVID')
+            self.video_writer = cv2.VideoWriter(f"output_{self.camera.id}.avi", fourcc, camera_fps, (frame_width, frame_height))
 
             while self.is_running:
                 ret, frame = self.cap.read()
@@ -615,40 +615,42 @@ class EnhancedCameraProcessor:
     def _process_frame(self, frame, fps, width, height):
         """Process a single frame with conditional detection logic for video files"""
         try:
-            # First, check for people using person detector
-            person_detector = self.detectors.get('person')
-            if person_detector is None:
-                # Add person detector if not available
-                from detectors import PersonDetector
-                person_detector = PersonDetector()
-                self.detectors['person'] = person_detector
+            # # First, check for people using person detector
+            # person_detector = self.detectors.get('person')
+            # if person_detector is None:
+            #     # Add person detector if not available
+            #     from detectors import PersonDetector
+            #     person_detector = PersonDetector()
+            #     self.detectors['person'] = person_detector
             
-            # Get person detection configuration
-            person_config = self.manager.model_manager.get_detector_config('person')
-            person_conf_threshold = person_config['conf_threshold']
-            person_iou_threshold = person_config['iou_threshold']
-            person_image_size = person_config['image_size']
+            # # Get person detection configuration
+            # person_config = self.manager.model_manager.get_detector_config('person')
+            # person_conf_threshold = person_config['conf_threshold']
+            # person_iou_threshold = person_config['iou_threshold']
+            # person_image_size = person_config['image_size']
             
-            # Run person detection
-            person_annotated_frame, person_results = person_detector.predict_video_frame(
-                'person',
-                frame, 
-                person_conf_threshold,
-                person_iou_threshold,
-                person_image_size
-            )
+            # # Run person detection
+            # person_annotated_frame, person_results = person_detector.predict_video_frame(
+            #     'person',
+            #     frame, 
+            #     person_conf_threshold,
+            #     person_iou_threshold,
+            #     person_image_size
+            # )
             
-            # Check if person is detected
-            has_person, person_confidence = self._check_detection_results(person_results, person_conf_threshold)
+            # # Check if person is detected
+            # has_person, person_confidence = self._check_detection_results(person_results, person_conf_threshold)
+            # print("has_person =====> :", has_person, " person_confidence: ", person_confidence, " person_conf_threshold: ", person_conf_threshold)
+            # self.video_writer.write(person_annotated_frame)
             
-            detectors_to_run = []
+            detectors_to_run = ['fire_smoke', 'fall', 'violence', 'choking']
             
-            if has_person:
-                # Person detected - check for fall, choking, violence
-                detectors_to_run.extend(['fall', 'violence', 'choking'])
-            else:
-                # No person detected - check for fire/smoke
-                detectors_to_run.append('fire_smoke')
+            # if has_person:
+            #     # Person detected - check for fall, choking, violence
+            #     detectors_to_run.extend(['fall', 'violence', 'choking'])
+            # else:
+            #     # No person detected - check for fire/smoke
+            #     detectors_to_run.append('fire_smoke')
             
             # Run appropriate detectors based on person detection
             for detector_type in detectors_to_run:

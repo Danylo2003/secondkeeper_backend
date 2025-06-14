@@ -35,6 +35,64 @@ class EnhancedVideoProcessor:
         # Video settings
         self.video_clip_duration = 10  # seconds
         self.fps = 20
+
+    def convert_to_web_compatible(self, video_path):
+        """
+        Converts a video to a web-compatible format using FFmpeg if it's available.
+        This is a fallback method to ensure videos can be played in web browsers.
+        
+        Args:
+            video_path: Path to the original video
+            
+        Returns:
+            str: Path to the converted video or original if conversion failed
+        """
+        try:
+            # Check if ffmpeg is available
+            import subprocess
+            result = subprocess.run(['ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            ffmpeg_available = result.returncode == 0
+        except:
+            ffmpeg_available = False
+            logger.warning("FFmpeg not found, skipping web-compatible conversion")
+            return video_path
+        
+        if not ffmpeg_available:
+            return video_path
+        
+        logger.info(f"Converting {video_path} to web-compatible format using FFmpeg")
+        
+        # Create new filename for the web-compatible video
+        base_dir = os.path.dirname(video_path)
+        filename = os.path.basename(video_path)
+        name, ext = os.path.splitext(filename)
+        web_path = os.path.join(base_dir, f"{name}_web.mp4")
+        
+        try:
+            # Use FFmpeg to convert the video to H.264 in MP4 container (web compatible)
+            command = [
+                'ffmpeg',
+                '-i', video_path,                # Input file
+                '-c:v', 'libx264',               # H.264 codec
+                '-preset', 'fast',               # Encoding speed/compression tradeoff
+                '-crf', '23',                    # Quality (lower = better)
+                '-pix_fmt', 'yuv420p',           # Pixel format for compatibility
+                '-y',                            # Overwrite output file if it exists
+                web_path                         # Output file
+            ]
+            
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            if result.returncode == 0 and os.path.exists(web_path):
+                logger.info(f"Successfully converted video to web format: {web_path}")
+                return web_path
+            else:
+                logger.error(f"FFmpeg conversion failed: {result.stderr.decode()}")
+                return video_path
+                
+        except Exception as e:
+            logger.error(f"Error during FFmpeg conversion: {str(e)}")
+            return video_path
     
     def create_test_detection_alert_with_bbox(self, camera, alert_type, confidence, detection_results, source_video_name, frame=None):
         """
@@ -63,6 +121,7 @@ class EnhancedVideoProcessor:
                 
                 # Generate file names
                 video_filename = f"test_{alert_type}_{timestamp}_{unique_id}.mp4"
+                
                 video_path = os.path.join(test_dir, video_filename)
                 
                 thumbnail_filename = f"test_{alert_type}_{timestamp}_{unique_id}_thumb.jpg"
@@ -78,18 +137,21 @@ class EnhancedVideoProcessor:
                 
                 if video_success:
                     # Create thumbnail from detection frame
+                    web_compatible_path = self.convert_to_web_compatible(video_path)
+                    os.remove(video_path)
+                    print("converted path ==================> ", web_compatible_path)
                     if frame is not None:
                         annotated_frame = self._draw_bounding_boxes(frame.copy(), bboxes, alert_type, confidence)
                         cv2.imwrite(thumbnail_path, annotated_frame)
                     else:
                         # Create thumbnail from first frame of output video
-                        self._create_thumbnail_from_video(video_path, thumbnail_path, bboxes, alert_type, confidence)
+                        self._create_thumbnail_from_video(web_compatible_path, thumbnail_path, bboxes, alert_type, confidence)
                     
                     # Determine severity
                     severity = self._determine_test_severity(alert_type, confidence)
                     
                     # Get relative paths for database storage
-                    video_relative_path = os.path.relpath(video_path, settings.MEDIA_ROOT)
+                    video_relative_path = os.path.relpath(web_compatible_path, settings.MEDIA_ROOT)
                     thumbnail_relative_path = os.path.relpath(thumbnail_path, settings.MEDIA_ROOT)
                     
                     # Create alert with video file
