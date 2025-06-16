@@ -31,7 +31,6 @@ urlpatterns = [
     path('api/faces/', include('faces.urls')),
     path('api/notifications/', include('notifications.urls')),
     path('api/admin/', include('admin_panel.urls')),
-    path('api/streaming/', include('streaming.urls')),
     
     # API documentation
     path('swagger<format>/', schema_view.without_ui(cache_timeout=0), name='schema-json'),
