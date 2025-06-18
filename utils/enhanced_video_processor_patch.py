@@ -211,75 +211,73 @@ def add_test_detection_support(video_processor_class):
             'fall': (0, 255, 255),        # Yellow  
             'violence': (0, 165, 255),    # Orange
             'choking': (255, 0, 0),       # Blue
-           'person': (0, 255, 0)         # Green
-       }
+            'person': (0, 255, 0)         # Green
+        }
        
-       color = color_map.get(alert_type, (255, 255, 255))  # Default white
+        color = color_map.get(alert_type, (255, 255, 255))  # Default white
        
-       # Draw title at top of frame
-       title_text = f"{alert_type.replace('_', ' ').title()} Detection"
-       cv2.putText(frame, title_text, (10, 30), 
+        # Draw title at top of frame
+        title_text = f"{alert_type.replace('_', ' ').title()} Detection"
+        cv2.putText(frame, title_text, (10, 30), 
                   cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
        
-       # Draw overall confidence
-       conf_text = f"Confidence: {confidence:.2f}"
-       cv2.putText(frame, conf_text, (10, 70), 
+        # Draw overall confidence
+        conf_text = f"Confidence: {confidence:.2f}"
+        cv2.putText(frame, conf_text, (10, 70), 
                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
        
-       # Draw bounding boxes
-       for bbox in bboxes:
-           x1, y1, x2, y2 = bbox['x1'], bbox['y1'], bbox['x2'], bbox['y2']
-           bbox_confidence = bbox['confidence']
-           class_name = bbox['class_name']
+        # Draw bounding boxes
+        for bbox in bboxes:
+            x1, y1, x2, y2 = bbox['x1'], bbox['y1'], bbox['x2'], bbox['y2']
+            bbox_confidence = bbox['confidence']
+            class_name = bbox['class_name']
            
-           # Draw rectangle with thicker border
-           cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
+            # Draw rectangle with thicker border
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
            
-           # Draw inner rectangle for better visibility
-           cv2.rectangle(frame, (x1+1, y1+1), (x2-1, y2-1), (255, 255, 255), 1)
+            # Draw inner rectangle for better visibility
+            cv2.rectangle(frame, (x1+1, y1+1), (x2-1, y2-1), (255, 255, 255), 1)
            
-           # Draw label with background
-           label = f"{class_name}: {bbox_confidence:.2f}"
-           label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+            # Draw label with background
+            label = f"{class_name}: {bbox_confidence:.2f}"
+            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
            
-           # Draw label background rectangle
-           cv2.rectangle(frame, (x1, y1 - label_size[1] - 15), 
+            # Draw label background rectangle
+            cv2.rectangle(frame, (x1, y1 - label_size[1] - 15), 
                         (x1 + label_size[0] + 10, y1), color, -1)
            
-           # Draw label text
-           cv2.putText(frame, label, (x1 + 5, y1 - 5), 
-                      cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            # Draw label text
+            cv2.putText(frame, label, (x1 + 5, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
        
-       # Add timestamp
-       timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-       cv2.putText(frame, timestamp, (10, frame.shape[0] - 20), 
-                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+        # Add timestamp
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cv2.putText(frame, timestamp, (10, frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
        
-       return frame
+        return frame
    
-   def _create_thumbnail_from_video_patch(self, video_path, thumbnail_path, bboxes, alert_type, confidence):
-       """Create thumbnail from first frame of video"""
-       try:
-           cap = cv2.VideoCapture(video_path)
-           if cap.isOpened():
-               ret, frame = cap.read()
-               if ret:
-                   annotated_frame = self._draw_bounding_boxes_patch(frame, bboxes, alert_type, confidence)
-                   cv2.imwrite(thumbnail_path, annotated_frame)
-               cap.release()
-       except Exception as e:
-           import logging
-           logger = logging.getLogger('security_ai')
-           logger.error(f"Error creating thumbnail from video: {str(e)}")
-   
-   # Add methods to the class
-   video_processor_class.create_test_detection_alert_with_bbox = create_test_detection_alert_with_bbox
-   video_processor_class._create_detection_video_from_source_patch = _create_detection_video_from_source_patch
-   video_processor_class._extract_bounding_boxes_patch = _extract_bounding_boxes_patch
-   video_processor_class._draw_bounding_boxes_patch = _draw_bounding_boxes_patch
-   video_processor_class._create_thumbnail_from_video_patch = _create_thumbnail_from_video_patch
-   
-   return video_processor_class
+    def _create_thumbnail_from_video_patch(self, video_path, thumbnail_path, bboxes, alert_type, confidence):
+        """Create thumbnail from first frame of video"""
+        try:
+            cap = cv2.VideoCapture(video_path)
+            if cap.isOpened():
+                ret, frame = cap.read()
+                if ret:
+                    annotated_frame = self._draw_bounding_boxes_patch(frame, bboxes, alert_type, confidence)
+                    cv2.imwrite(thumbnail_path, annotated_frame)
+                cap.release()
+        except Exception as e:
+            import logging
+            logger = logging.getLogger('security_ai')
+            logger.error(f"Error creating thumbnail from video: {str(e)}")
+    
+    # Add methods to the class
+    video_processor_class.create_test_detection_alert_with_bbox = create_test_detection_alert_with_bbox
+    video_processor_class._create_detection_video_from_source_patch = _create_detection_video_from_source_patch
+    video_processor_class._extract_bounding_boxes_patch = _extract_bounding_boxes_patch
+    video_processor_class._draw_bounding_boxes_patch = _draw_bounding_boxes_patch
+    video_processor_class._create_thumbnail_from_video_patch = _create_thumbnail_from_video_patch
+    
+    return video_processor_class
 
 # Apply the patch to the original EnhancedVideoProcessor
 from utils.enhanced_video_processor import EnhancedVideoProcessor

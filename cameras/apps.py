@@ -1,4 +1,4 @@
-# cameras/apps.py - Updated to auto-start ENHANCED detection service
+# cameras/apps.py - Updated to use enhanced detection manager properly
 
 from django.apps import AppConfig
 import threading
@@ -12,7 +12,7 @@ class CamerasConfig(AppConfig):
     name = 'cameras'
     
     def ready(self):
-        """Called when Django is ready - now uses enhanced detection manager"""
+        """Called when Django is ready - now uses enhanced detection manager with proper alert storage"""
         # Only start detection service in the main process
         # and not during migrations or management commands
         import os
@@ -32,16 +32,15 @@ class CamerasConfig(AppConfig):
                 try:
                     # Import the ENHANCED detection manager
                     from utils.enhanced_detection_manager import enhanced_detection_manager
-                    logger.info("Auto-starting Enhanced Camera Detection Service...")
+                    logger.info("Auto-starting Enhanced Camera Detection Service with Alert Storage...")
                     enhanced_detection_manager.start()
-                    logger.info("Enhanced Camera Detection Service started automatically")
+                    logger.info("Enhanced Camera Detection Service started automatically with proper alert storage and 10-second video recording")
                 except Exception as e:
                     logger.error(f"Failed to auto-start enhanced detection service: {str(e)}")
                     # Fallback to original detection manager
                     try:
                         from utils.camera_detection_manager import detection_manager
                         logger.info("Falling back to original detection manager...")
-                        print("camera detection manager ===========>")
                         detection_manager.start()
                         logger.info("Original Camera Detection Service started as fallback")
                     except Exception as e2:

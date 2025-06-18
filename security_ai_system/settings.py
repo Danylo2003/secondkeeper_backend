@@ -233,7 +233,7 @@ MODEL_PATHS = {
     'fire_smoke': os.path.join(BASE_DIR, 'models', 'fire_smoke.pt'),
     'fall': os.path.join(BASE_DIR, 'models', 'fall.pt'),
     'violence': os.path.join(BASE_DIR, 'models', 'violence.pt'),
-    'choking': os.path.join(BASE_DIR, 'models', 'choking.pt'),
+    'choking': os.path.join(BASE_DIR, 'models', 'yolov8m-pose.pt'),
     'person': os.path.join(BASE_DIR, 'models', 'yolov8m.pt'),
 }
 

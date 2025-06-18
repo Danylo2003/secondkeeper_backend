@@ -74,7 +74,11 @@ class BaseDetector(ABC):
             if detect_type == "person":
                 # COCO dataset person class ID is 0
                 classes = [0]  # Person class in COCO/YOLOv8
+            if detect_type == "violence":
+                classes = [1]
             
+            if detect_type == "fire_smoke":
+                classes = [1]
             # Run prediction on the frame
             results = model.predict(
                 source=frame,
